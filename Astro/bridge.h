@@ -9,4 +9,10 @@ typedef struct {
     simd_float3 cameraPosition;
 } GlobalUniforms;
 
+// Structure to hold Morton code and particle index
+typedef struct {
+    uint64_t mortonCode;  // 64-bit Morton code
+    uint32_t particleIndex;  // Index of the particle
+} MortonCodeEntry;
+
 #endif /* bridge_h */

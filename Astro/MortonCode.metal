@@ -1,0 +1,45 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+#include "bridge.h"
+
+using namespace metal;
+
+// Morton code generation for 32-bit coordinates to 64-bit Morton codes
+uint64_t interleaveBitsOptimized(uint32_t x, uint32_t y, uint32_t z) {
+    // Use first 21 bits of each coordinate (21 * 3 = 63 bits, 1 bit left)
+    x &= 0x1FFFFF;  // 21 bits
+    y &= 0x1FFFFF;  // 21 bits  
+    z &= 0x1FFFFF;  // 21 bits
+    
+    uint64_t result = 0;
+    
+    // Interleave bits: x, y, z -> result
+    for (int i = 0; i < 21; i++) {
+        result |= ((uint64_t)(x & (1 << i)) << (2 * i));
+        result |= ((uint64_t)(y & (1 << i)) << (2 * i + 1));
+        result |= ((uint64_t)(z & (1 << i)) << (2 * i + 2));
+    }
+    
+    return result;
+}
+
+// Compute kernel to generate Morton codes from particle positions (Array of Structs)
+kernel void generateMortonCodes(device const int4 *spherePositions [[buffer(0)]],
+                               device MortonCodeEntry *mortonCodes [[buffer(1)]],
+                               uint particleIndex [[thread_position_in_grid]])
+{
+    // Get particle position
+    int4 position = spherePositions[particleIndex];
+    
+    // Convert to unsigned coordinates with offset to handle negative values
+    uint32_t x = (uint32_t)(position.x + 1000000);
+    uint32_t y = (uint32_t)(position.y + 1000000);
+    uint32_t z = (uint32_t)(position.z + 1000000);
+    
+    // Generate Morton code using optimized bit interleaving
+    uint64_t mortonCode = interleaveBitsOptimized(x, y, z);
+    
+    // Store result in Array of Structs format
+    mortonCodes[particleIndex].mortonCode = mortonCode;
+    mortonCodes[particleIndex].particleIndex = particleIndex;
+} 

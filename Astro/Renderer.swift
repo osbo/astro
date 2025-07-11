@@ -45,8 +45,10 @@ class Renderer: NSObject, MTKViewDelegate {
     var globalUniformsBuffer: MTLBuffer!
     var spherePositionsBuffer: MTLBuffer!
     var sphereVelocityBuffer: MTLBuffer!
+    var mortonCodesBuffer: MTLBuffer!
 
     var pipelinesCreated = false
+    var computePipelineState: MTLComputePipelineState!
 
     init(_ parent: ContentView) {
         self.parent = parent
@@ -146,6 +148,9 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let postProcessFragmentFunction = library.makeFunction(name: "postProcessFragment") else {
             fatalError("Could not find postProcessFragment function.")
         }
+        guard let generateMortonCodesFunction = library.makeFunction(name: "generateMortonCodes") else {
+            fatalError("Could not find generateMortonCodes function.")
+        }
 
         let spherePipelineDescriptor = MTLRenderPipelineDescriptor()
         spherePipelineDescriptor.label = "Sphere Render Pipeline"
@@ -172,6 +177,7 @@ class Renderer: NSObject, MTKViewDelegate {
             spherePipelineState = try device.makeRenderPipelineState(descriptor: spherePipelineDescriptor)
             dustPipelineState = try device.makeRenderPipelineState(descriptor: dustPipelineDescriptor)
             postProcessPipelineState = try device.makeRenderPipelineState(descriptor: postProcessPipelineDescriptor)
+            computePipelineState = try device.makeComputePipelineState(function: generateMortonCodesFunction)
         } catch {
             fatalError("Failed to create pipeline state: \(error)")
         }
@@ -188,6 +194,9 @@ class Renderer: NSObject, MTKViewDelegate {
         
         self.sphereVelocityBuffer = device.makeBuffer(length: MemoryLayout<simd_int4>.stride * sphereCount, options: .storageModeShared)
         self.sphereVelocityBuffer.label = "Sphere Velocities and Radii"
+        
+        self.mortonCodesBuffer = device.makeBuffer(length: MemoryLayout<MortonCodeEntry>.stride * sphereCount, options: .storageModeShared)
+        self.mortonCodesBuffer.label = "Morton Codes Buffer"
     }
     
     func makeSpheres() {
@@ -233,11 +242,54 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
         commandBuffer.label = "Main Command Buffer"
         
+        // Generate Morton codes for all particles at the beginning of every frame
+        generateMortonCodes(commandBuffer: commandBuffer)
+        
         renderScene(commandBuffer: commandBuffer, view: view)
         postProcess(commandBuffer: commandBuffer, source: sceneTexture, screenPassDescriptor: screenRenderPassDescriptor)
         
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+    
+    func generateMortonCodes(commandBuffer: MTLCommandBuffer) {
+        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        computeEncoder.label = "Morton Code Generation"
+        
+        computeEncoder.setComputePipelineState(computePipelineState)
+        computeEncoder.setBuffer(spherePositionsBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(mortonCodesBuffer, offset: 0, index: 1)
+        
+        let threadGroupSize = MTLSizeMake(64, 1, 1)
+        let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+        
+        computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
+        
+        // debugPrintMortonCodes()
+    }
+    
+    func debugPrintMortonCodes() {
+        guard let mortonBuffer = mortonCodesBuffer else { return }
+        
+        let mortonPointer = mortonBuffer.contents().bindMemory(to: MortonCodeEntry.self, capacity: Int(numSpheres))
+        let positionPointer = spherePositionsBuffer.contents().bindMemory(to: simd_int4.self, capacity: Int(numSpheres))
+        
+        let numToPrint = min(10, Int(numSpheres))
+        print("=== First \(numToPrint) Morton Codes ===")
+        
+        for i in 0..<numToPrint {
+            let mortonEntry = mortonPointer[i]
+            let position = positionPointer[i]
+            
+            print("Particle \(i):")
+            print("  Morton Code: \(mortonEntry.mortonCode)")
+            print("  Particle Index: \(mortonEntry.particleIndex)")
+            print("  Position: (\(position.x), \(position.y), \(position.z))")
+            print("  Mass: \(position.w)")
+            print("---")
+        }
+        print("================================")
     }
     
     func renderScene(commandBuffer: MTLCommandBuffer, view: MTKView) {
