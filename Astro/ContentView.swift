@@ -21,16 +21,8 @@ struct ContentView: NSViewRepresentable {
         // Enable HDR output
         if let metalLayer = mtkView.layer as? CAMetalLayer {
             metalLayer.wantsExtendedDynamicRangeContent = true
-            let colorSpaceNames = [
-                "ITUR_2020_PQ_EOTF", // BT.2020 PQ (HDR)
-                "ITUR_2020",         // BT.2020 (wide gamut, not PQ)
-                "kCGColorSpaceExtendedLinearSRGB" // Wide-gamut EDR fallback
-            ]
-            for name in colorSpaceNames {
-                if let cs = CGColorSpace(name: name as CFString) {
-                    metalLayer.colorspace = cs
-                    break
-                }
+            if let cs = CGColorSpace(name: "kCGColorSpaceExtendedLinearSRGB" as CFString) {
+                metalLayer.colorspace = cs
             }
         }
 

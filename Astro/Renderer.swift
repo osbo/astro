@@ -16,6 +16,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var currentTime: Float = 0.0
     
     // --- Simulation Parameters ---
+    var usePostProcessing: Bool = false
     var numStars: Int32 = 3
     var numPlanets: Int32 = 100
     var numDust: Int32 = 1000000
@@ -46,6 +47,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var spherePositionsBuffer: MTLBuffer!
     var sphereVelocityBuffer: MTLBuffer!
     var mortonCodesBuffer: MTLBuffer!
+    var indicesBuffer: MTLBuffer!
 
     var pipelinesCreated = false
     var computePipelineState: MTLComputePipelineState!
@@ -109,7 +111,7 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     private func setupOffscreenTextures(size: CGSize) {
-        let fullResDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: Int(size.width), height: Int(size.height), mipmapped: false)
+        let fullResDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: Int(size.width), height: Int(size.height), mipmapped: false)
         fullResDesc.storageMode = .private
         fullResDesc.usage = [.renderTarget, .shaderRead]
         sceneTexture = device.makeTexture(descriptor: fullResDesc)
@@ -157,21 +159,21 @@ class Renderer: NSObject, MTKViewDelegate {
         spherePipelineDescriptor.vertexFunction = sphereVertexFunction
         spherePipelineDescriptor.fragmentFunction = fragmentFunction
         spherePipelineDescriptor.vertexDescriptor = MTKMetalVertexDescriptorFromModelIO(starSphere.vertexDescriptor)
-        spherePipelineDescriptor.colorAttachments[0].pixelFormat = sceneTexture.pixelFormat
+        spherePipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
         spherePipelineDescriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         
         let dustPipelineDescriptor = MTLRenderPipelineDescriptor()
         dustPipelineDescriptor.label = "Dust Render Pipeline"
         dustPipelineDescriptor.vertexFunction = dustVertexFunction
         dustPipelineDescriptor.fragmentFunction = fragmentFunction
-        dustPipelineDescriptor.colorAttachments[0].pixelFormat = sceneTexture.pixelFormat
+        dustPipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
         dustPipelineDescriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         
         let postProcessPipelineDescriptor = MTLRenderPipelineDescriptor()
         postProcessPipelineDescriptor.label = "Post-Process Pipeline"
         postProcessPipelineDescriptor.vertexFunction = postProcessVertexFunction
         postProcessPipelineDescriptor.fragmentFunction = postProcessFragmentFunction
-        postProcessPipelineDescriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        postProcessPipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
         
         do {
             spherePipelineState = try device.makeRenderPipelineState(descriptor: spherePipelineDescriptor)
@@ -195,8 +197,11 @@ class Renderer: NSObject, MTKViewDelegate {
         self.sphereVelocityBuffer = device.makeBuffer(length: MemoryLayout<simd_int4>.stride * sphereCount, options: .storageModeShared)
         self.sphereVelocityBuffer.label = "Sphere Velocities and Radii"
         
-        self.mortonCodesBuffer = device.makeBuffer(length: MemoryLayout<MortonCodeEntry>.stride * sphereCount, options: .storageModeShared)
+        self.mortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * sphereCount, options: .storageModeShared)
         self.mortonCodesBuffer.label = "Morton Codes Buffer"
+        
+        self.indicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.indicesBuffer.label = "Indices Buffer"
     }
     
     func makeSpheres() {
@@ -225,6 +230,10 @@ class Renderer: NSObject, MTKViewDelegate {
         
         spherePositionsBuffer.contents().copyMemory(from: spherePositions, byteCount: MemoryLayout<simd_int4>.stride * spherePositions.count)
         sphereVelocityBuffer.contents().copyMemory(from: sphereVelocities, byteCount: MemoryLayout<simd_int4>.stride * sphereVelocities.count)
+        
+        // Initialize indices buffer with sequential indices
+        let indices = Array(0..<numSpheres).map { UInt32($0) }
+        indicesBuffer.contents().copyMemory(from: indices, byteCount: MemoryLayout<UInt32>.stride * indices.count)
     }
     
     func draw(in view: MTKView) {
@@ -245,8 +254,12 @@ class Renderer: NSObject, MTKViewDelegate {
         // Generate Morton codes for all particles at the beginning of every frame
         generateMortonCodes(commandBuffer: commandBuffer)
         
-        renderScene(commandBuffer: commandBuffer, view: view)
-        postProcess(commandBuffer: commandBuffer, source: sceneTexture, screenPassDescriptor: screenRenderPassDescriptor)
+        if usePostProcessing {
+            renderScene(commandBuffer: commandBuffer, view: view)
+            postProcess(commandBuffer: commandBuffer, source: sceneTexture, screenPassDescriptor: screenRenderPassDescriptor)
+        } else {
+            renderSceneDirect(commandBuffer: commandBuffer, view: view, screenPassDescriptor: screenRenderPassDescriptor)
+        }
         
         commandBuffer.present(drawable)
         commandBuffer.commit()
@@ -259,6 +272,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setComputePipelineState(computePipelineState)
         computeEncoder.setBuffer(spherePositionsBuffer, offset: 0, index: 0)
         computeEncoder.setBuffer(mortonCodesBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(indicesBuffer, offset: 0, index: 2)
         
         let threadGroupSize = MTLSizeMake(64, 1, 1)
         let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
@@ -266,25 +280,28 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
         
-        // debugPrintMortonCodes()
+//         debugPrintMortonCodes()
     }
     
     func debugPrintMortonCodes() {
-        guard let mortonBuffer = mortonCodesBuffer else { return }
+        guard let mortonBuffer = mortonCodesBuffer,
+              let indicesBuffer = indicesBuffer else { return }
         
-        let mortonPointer = mortonBuffer.contents().bindMemory(to: MortonCodeEntry.self, capacity: Int(numSpheres))
+        let mortonPointer = mortonBuffer.contents().bindMemory(to: UInt64.self, capacity: Int(numSpheres))
+        let indicesPointer = indicesBuffer.contents().bindMemory(to: UInt32.self, capacity: Int(numSpheres))
         let positionPointer = spherePositionsBuffer.contents().bindMemory(to: simd_int4.self, capacity: Int(numSpheres))
         
         let numToPrint = min(10, Int(numSpheres))
         print("=== First \(numToPrint) Morton Codes ===")
         
         for i in 0..<numToPrint {
-            let mortonEntry = mortonPointer[i]
+            let mortonCode = mortonPointer[i]
+            let particleIndex = indicesPointer[i]
             let position = positionPointer[i]
             
             print("Particle \(i):")
-            print("  Morton Code: \(mortonEntry.mortonCode)")
-            print("  Particle Index: \(mortonEntry.particleIndex)")
+            print("  Morton Code: \(mortonCode)")
+            print("  Particle Index: \(particleIndex)")
             print("  Position: (\(position.x), \(position.y), \(position.z))")
             print("  Mass: \(position.w)")
             print("---")
@@ -306,8 +323,19 @@ class Renderer: NSObject, MTKViewDelegate {
             sceneRenderPassDescriptor.depthAttachment.clearDepth = 1.0
         }
         
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: sceneRenderPassDescriptor) else { return }
-        renderEncoder.label = "Scene Render Pass"
+        renderSceneToPass(commandBuffer: commandBuffer, renderPassDescriptor: sceneRenderPassDescriptor, label: "Scene Render Pass")
+    }
+    
+    func renderSceneDirect(commandBuffer: MTLCommandBuffer, view: MTKView, screenPassDescriptor: MTLRenderPassDescriptor) {
+        // Set the clear color for direct rendering
+        screenPassDescriptor.colorAttachments[0].clearColor = backgroundColor
+        
+        renderSceneToPass(commandBuffer: commandBuffer, renderPassDescriptor: screenPassDescriptor, label: "Direct Scene Render Pass")
+    }
+    
+    private func renderSceneToPass(commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor, label: String) {
+        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { return }
+        renderEncoder.label = label
         renderEncoder.setDepthStencilState(depthStencilState)
         renderEncoder.setCullMode(.back)
         
