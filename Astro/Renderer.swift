@@ -48,9 +48,12 @@ class Renderer: NSObject, MTKViewDelegate {
     var sphereVelocityBuffer: MTLBuffer!
     var mortonCodesBuffer: MTLBuffer!
     var indicesBuffer: MTLBuffer!
+    var sortedMortonCodesBuffer: MTLBuffer!
+    var sortedIndicesBuffer: MTLBuffer!
 
     var pipelinesCreated = false
     var computePipelineState: MTLComputePipelineState!
+    var radixSorter: MetalKernelsRadixSort!
 
     init(_ parent: ContentView) {
         self.parent = parent
@@ -79,6 +82,7 @@ class Renderer: NSObject, MTKViewDelegate {
         makeBuffers()
         makeSpheres()
         createTextureSampler(device: device)
+        radixSorter = MetalKernelsRadixSort(device: device)
     }
 
     private func setupDepthStencilStates() {
@@ -202,6 +206,12 @@ class Renderer: NSObject, MTKViewDelegate {
         
         self.indicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
         self.indicesBuffer.label = "Indices Buffer"
+        
+        self.sortedMortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * sphereCount, options: .storageModeShared)
+        self.sortedMortonCodesBuffer.label = "Sorted Morton Codes Buffer"
+        
+        self.sortedIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.sortedIndicesBuffer.label = "Sorted Indices Buffer"
     }
     
     func makeSpheres() {
@@ -253,6 +263,9 @@ class Renderer: NSObject, MTKViewDelegate {
         
         // Generate Morton codes for all particles at the beginning of every frame
         generateMortonCodes(commandBuffer: commandBuffer)
+        
+        // Sort the Morton codes
+        radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: UInt32(numSpheres))
         
         if usePostProcessing {
             renderScene(commandBuffer: commandBuffer, view: view)
