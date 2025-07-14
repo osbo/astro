@@ -44,8 +44,9 @@ class Renderer: NSObject, MTKViewDelegate {
     var postProcessPipelineState: MTLRenderPipelineState!
     
     var globalUniformsBuffer: MTLBuffer!
-    var spherePositionsBuffer: MTLBuffer!
-    var sphereVelocityBuffer: MTLBuffer!
+    var positionMassBuffer: MTLBuffer!
+    var velocityRadiusBuffer: MTLBuffer!
+    var colorTypeBuffer: MTLBuffer!
     var mortonCodesBuffer: MTLBuffer!
     var indicesBuffer: MTLBuffer!
     var sortedMortonCodesBuffer: MTLBuffer!
@@ -195,11 +196,14 @@ class Renderer: NSObject, MTKViewDelegate {
         self.globalUniformsBuffer = device.makeBuffer(length: MemoryLayout<GlobalUniforms>.stride, options: .storageModeShared)
         self.globalUniformsBuffer.label = "Global Uniforms Buffer"
         
-        self.spherePositionsBuffer = device.makeBuffer(length: MemoryLayout<simd_int4>.stride * sphereCount, options: .storageModeShared)
-        self.spherePositionsBuffer.label = "Sphere Positions and Mass"
+        self.positionMassBuffer = device.makeBuffer(length: MemoryLayout<PositionMass>.stride * sphereCount, options: .storageModeShared)
+        self.positionMassBuffer.label = "Position Mass Buffer"
         
-        self.sphereVelocityBuffer = device.makeBuffer(length: MemoryLayout<simd_int4>.stride * sphereCount, options: .storageModeShared)
-        self.sphereVelocityBuffer.label = "Sphere Velocities and Radii"
+        self.velocityRadiusBuffer = device.makeBuffer(length: MemoryLayout<VelocityRadius>.stride * sphereCount, options: .storageModeShared)
+        self.velocityRadiusBuffer.label = "Velocity Radius Buffer"
+        
+        self.colorTypeBuffer = device.makeBuffer(length: MemoryLayout<ColorType>.stride * sphereCount, options: .storageModeShared)
+        self.colorTypeBuffer.label = "Color Type Buffer"
         
         self.mortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * sphereCount, options: .storageModeShared)
         self.mortonCodesBuffer.label = "Morton Codes Buffer"
@@ -215,31 +219,50 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     func makeSpheres() {
-        var spherePositions: [simd_int4] = []
-        var sphereVelocities: [simd_int4] = []
+        var positions: [PositionMass] = []
+        var velocities: [VelocityRadius] = []
+        var colors: [ColorType] = []
         
-        for _ in 0..<numSpheres {
-            let position = simd_int4(Int32.random(in: -spawnBounds...spawnBounds), Int32.random(in: -spawnBounds...spawnBounds), Int32.random(in: -spawnBounds...spawnBounds), 0)
-            let velocity = simd_int4(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum), Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum), Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum), 0)
-            spherePositions.append(position)
-            sphereVelocities.append(velocity)
+        for i in 0..<numSpheres {
+            let position = simd_float3(Float(Int32.random(in: -spawnBounds...spawnBounds)), Float(Int32.random(in: -spawnBounds...spawnBounds)), Float(Int32.random(in: -spawnBounds...spawnBounds)))
+            let velocity = simd_float3(Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)), Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)), Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)))
+            
+            var type: UInt32 = 0
+            var mass: Float = 0
+            var radius: Float = 0
+            var color: simd_float4 = simd_float4(0,0,0,1)
+
+            if i < numStars {
+                type = 0
+                mass = Float(starMass)
+                radius = Float(starRadius)
+                
+                // Distribute star colors across the OKLab spectrum
+                let hue = Float(i) / Float(numStars)
+                let oklabColor = simd_float3(0.8, 0.2 * cos(2 * .pi * hue), 0.2 * sin(2 * .pi * hue))
+                let srgbColor = oklabToSrgb(oklab: oklabColor)
+                color = simd_float4(srgbColor.x, srgbColor.y, srgbColor.z, 1.0)
+
+            } else if i < numStars + numPlanets {
+                type = 1
+                mass = Float(planetMass)
+                radius = Float(planetRadius)
+                color = simd_float4(0, 0, 0, 1) // Black for planets
+            } else {
+                type = 2
+                mass = Float(dustMass)
+                radius = Float(dustRadius)
+                color = simd_float4(0, 0, 0, 0) // Transparent for dust
+            }
+            
+            positions.append(PositionMass(position: position, mass: mass))
+            velocities.append(VelocityRadius(velocity: velocity, radius: radius))
+            colors.append(ColorType(color: color, type: type))
         }
         
-        for i in 0..<Int(numStars) {
-            spherePositions[i].w = starMass
-            sphereVelocities[i].w = starRadius
-        }
-        for i in Int(numStars)..<Int(numStars + numPlanets) {
-            spherePositions[i].w = planetMass
-            sphereVelocities[i].w = planetRadius
-        }
-        for i in Int(numStars + numPlanets)..<Int(numSpheres) {
-            spherePositions[i].w = dustMass
-            sphereVelocities[i].w = dustRadius
-        }
-        
-        spherePositionsBuffer.contents().copyMemory(from: spherePositions, byteCount: MemoryLayout<simd_int4>.stride * spherePositions.count)
-        sphereVelocityBuffer.contents().copyMemory(from: sphereVelocities, byteCount: MemoryLayout<simd_int4>.stride * sphereVelocities.count)
+        positionMassBuffer.contents().copyMemory(from: positions, byteCount: MemoryLayout<PositionMass>.stride * positions.count)
+        velocityRadiusBuffer.contents().copyMemory(from: velocities, byteCount: MemoryLayout<VelocityRadius>.stride * velocities.count)
+        colorTypeBuffer.contents().copyMemory(from: colors, byteCount: MemoryLayout<ColorType>.stride * colors.count)
         
         // Initialize indices buffer with sequential indices
         let indices = Array(0..<numSpheres).map { UInt32($0) }
@@ -283,7 +306,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.label = "Morton Code Generation"
         
         computeEncoder.setComputePipelineState(computePipelineState)
-        computeEncoder.setBuffer(spherePositionsBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 0)
         computeEncoder.setBuffer(mortonCodesBuffer, offset: 0, index: 1)
         computeEncoder.setBuffer(indicesBuffer, offset: 0, index: 2)
         
@@ -302,7 +325,7 @@ class Renderer: NSObject, MTKViewDelegate {
         
         let mortonPointer = mortonBuffer.contents().bindMemory(to: UInt64.self, capacity: Int(numSpheres))
         let indicesPointer = indicesBuffer.contents().bindMemory(to: UInt32.self, capacity: Int(numSpheres))
-        let positionPointer = spherePositionsBuffer.contents().bindMemory(to: simd_int4.self, capacity: Int(numSpheres))
+        let positionPointer = positionMassBuffer.contents().bindMemory(to: PositionMass.self, capacity: Int(numSpheres))
         
         let numToPrint = min(10, Int(numSpheres))
         print("=== First \(numToPrint) Morton Codes ===")
@@ -315,8 +338,8 @@ class Renderer: NSObject, MTKViewDelegate {
             print("Particle \(i):")
             print("  Morton Code: \(mortonCode)")
             print("  Particle Index: \(particleIndex)")
-            print("  Position: (\(position.x), \(position.y), \(position.z))")
-            print("  Mass: \(position.w)")
+            print("  Position: (\(position.position.x), \(position.position.y), \(position.position.z))")
+            print("  Mass: \(position.mass)")
             print("---")
         }
         print("================================")
@@ -353,8 +376,9 @@ class Renderer: NSObject, MTKViewDelegate {
         renderEncoder.setCullMode(.back)
         
         renderEncoder.setVertexBuffer(globalUniformsBuffer, offset: 0, index: 1)
-        renderEncoder.setVertexBuffer(spherePositionsBuffer, offset: 0, index: 2)
-        renderEncoder.setVertexBuffer(sphereVelocityBuffer, offset: 0, index: 3)
+        renderEncoder.setVertexBuffer(positionMassBuffer, offset: 0, index: 2)
+        renderEncoder.setVertexBuffer(velocityRadiusBuffer, offset: 0, index: 3)
+        renderEncoder.setVertexBuffer(colorTypeBuffer, offset: 0, index: 4)
 
         if numStars > 0 {
             renderEncoder.setRenderPipelineState(spherePipelineState)

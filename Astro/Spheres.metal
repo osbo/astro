@@ -1,15 +1,17 @@
 #include <metal_stdlib>
-#include <simd/simd.h>
 #include "bridge.h"
 
 using namespace metal;
+
 struct VertexOut {
     float4 position [[position]];
+    float4 color;
 };
 
 struct DustVertexOut {
     float4 position [[position]];
     float pointSize [[point_size]];
+    float4 color;
 };
 
 struct VertexIn {
@@ -19,18 +21,20 @@ struct VertexIn {
 
 vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
                                constant GlobalUniforms &globalUniforms [[buffer(1)]],
-                               device const int4 *spherePositions [[buffer(2)]],
-                               device const int4 *sphereVelocities [[buffer(3)]],
+                               device const PositionMass *positions [[buffer(2)]],
+                               device const VelocityRadius *velocities [[buffer(3)]],
+                               device const ColorType *colors [[buffer(4)]],
                                uint instanceID [[instance_id]])
 {
     VertexOut out;
-    int4 positionData = spherePositions[instanceID];
-    int4 velocityData = sphereVelocities[instanceID];
-    float radius = float(velocityData.w);
-    float3 instancePosition = float3(positionData.x, positionData.y, positionData.z);
-    float3 worldPosition = (in.position * radius) + instancePosition;
+    PositionMass positionData = positions[instanceID];
+    VelocityRadius velocityData = velocities[instanceID];
+    ColorType colorData = colors[instanceID];
+
+    float3 worldPosition = (in.position * velocityData.radius) + positionData.position;
 
     out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(worldPosition, 1.0);
+    out.color = colorData.color;
     
     return out;
 }
@@ -38,24 +42,25 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
 vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
                                   uint instanceID [[instance_id]],
                                   constant GlobalUniforms &globalUniforms [[buffer(1)]],
-                                  device const int4 *spherePositions [[buffer(2)]],
-                                  device const int4 *sphereVelocities [[buffer(3)]])
+                                  device const PositionMass *positions [[buffer(2)]],
+                                  device const VelocityRadius *velocities [[buffer(3)]],
+                                  device const ColorType *colors [[buffer(4)]])
 {
     DustVertexOut out;
-    int4 positionData = spherePositions[instanceID];
-    int4 velocityData = sphereVelocities[instanceID];
-    float radius = float(velocityData.w);
-    float3 particleCenterWorld = float3(positionData.x, positionData.y, positionData.z);
+    PositionMass positionData = positions[instanceID];
+    VelocityRadius velocityData = velocities[instanceID];
+    ColorType colorData = colors[instanceID];
+
+    float3 particleCenterWorld = positionData.position;
     
     out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(particleCenterWorld, 1.0);
-    
-    // Set point size based on radius
-    out.pointSize = radius;
+    out.pointSize = velocityData.radius;
+    out.color = colorData.color;
 
     return out;
 }
 
 fragment float4 fragment_shader(VertexOut in [[stage_in]])
 {
-    return float4(1.0, 1.0, 1.0, 1.0);
+    return in.color;
 }

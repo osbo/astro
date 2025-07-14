@@ -1,5 +1,4 @@
 #include <metal_stdlib>
-#include <simd/simd.h>
 #include "bridge.h"
 
 using namespace metal;
@@ -24,18 +23,18 @@ uint64_t interleaveBitsOptimized(uint32_t x, uint32_t y, uint32_t z) {
 }
 
 // Compute kernel to generate Morton codes from particle positions
-kernel void generateMortonCodes(device const int4 *spherePositions [[buffer(0)]],
+kernel void generateMortonCodes(device const PositionMass *positions [[buffer(0)]],
                                device uint64_t *mortonCodes [[buffer(1)]],
                                device uint32_t *indices [[buffer(2)]],
                                uint particleIndex [[thread_position_in_grid]])
 {
     // Get particle position
-    int4 position = spherePositions[particleIndex];
+    PositionMass data = positions[particleIndex];
     
     // Convert to unsigned coordinates with offset to handle negative values
-    uint32_t x = (uint32_t)(position.x + 1000000);
-    uint32_t y = (uint32_t)(position.y + 1000000);
-    uint32_t z = (uint32_t)(position.z + 1000000);
+    uint32_t x = (uint32_t)(data.position.x + 1000000);
+    uint32_t y = (uint32_t)(data.position.y + 1000000);
+    uint32_t z = (uint32_t)(data.position.z + 1000000);
     
     // Generate Morton code using optimized bit interleaving
     uint64_t mortonCode = interleaveBitsOptimized(x, y, z);
