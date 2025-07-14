@@ -174,6 +174,16 @@ class Renderer: NSObject, MTKViewDelegate {
         dustPipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
         dustPipelineDescriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         
+        // Enable alpha blending for dust
+        let colorAttachment = dustPipelineDescriptor.colorAttachments[0]!
+        colorAttachment.isBlendingEnabled = true
+        colorAttachment.rgbBlendOperation = .add
+        colorAttachment.alphaBlendOperation = .add
+        colorAttachment.sourceRGBBlendFactor = .sourceAlpha
+        colorAttachment.sourceAlphaBlendFactor = .sourceAlpha
+        colorAttachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        colorAttachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        
         let postProcessPipelineDescriptor = MTLRenderPipelineDescriptor()
         postProcessPipelineDescriptor.label = "Post-Process Pipeline"
         postProcessPipelineDescriptor.vertexFunction = postProcessVertexFunction

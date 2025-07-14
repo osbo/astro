@@ -55,7 +55,10 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
     
     out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(particleCenterWorld, 1.0);
     out.pointSize = velocityData.radius;
-    out.color = colorData.color;
+    
+    // Set alpha based on brightness
+    float brightness = max(colorData.color.r, max(colorData.color.g, colorData.color.b));
+    out.color = float4(colorData.color.rgb, brightness);
 
     return out;
 }
