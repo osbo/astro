@@ -104,15 +104,18 @@ kernel void aggregateLeafNodes(
     }
 }
 
+// Updated aggregateNodes kernel: single node buffer, explicit input/output offsets
 kernel void aggregateNodes(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
     device const uint32_t* sortedIndices [[buffer(1)]],
-    device const OctreeLeafNode* childNodes [[buffer(2)]], // could be leaf or parent nodes
-    device OctreeLeafNode* parentNodes [[buffer(3)]],
-    device ulong* parentMortonCodes [[buffer(4)]],
-    device const uint* uniqueMortonCodeCount [[buffer(5)]],
-    device const uint* uniqueMortonCodeStartIndices [[buffer(6)]],
-    constant uint& numChildren [[buffer(7)]],
+    device OctreeLeafNode* nodeBuffer [[buffer(2)]], // all nodes in one buffer
+    device const ulong* parentMortonCodesIn [[buffer(3)]],
+    device const uint* uniqueMortonCodeCount [[buffer(4)]],
+    device const uint* uniqueMortonCodeStartIndices [[buffer(5)]],
+    constant uint& numChildren [[buffer(6)]],
+    constant uint& inputNodeStart [[buffer(7)]],
+    constant uint& outputNodeStart [[buffer(8)]],
+    constant uint& layerShift [[buffer(9)]],
     uint nodeIndex [[thread_position_in_grid]])
 {
     uint uniqueCount = uniqueMortonCodeCount[0];
@@ -122,7 +125,7 @@ kernel void aggregateNodes(
 
     uint startIndex = uniqueMortonCodeStartIndices[nodeIndex];
     uint endIndex = (nodeIndex + 1 < uniqueCount) ? uniqueMortonCodeStartIndices[nodeIndex + 1] : numChildren;
-    uint64_t parentMortonCode = sortedMortonCodes[startIndex] >> 3; // parent code is one level up
+    uint64_t parentMortonCode = sortedMortonCodes[startIndex] >> layerShift;
 
     // Aggregate data from child nodes
     float3 centerOfMassSum = float3(0);
@@ -133,7 +136,7 @@ kernel void aggregateNodes(
 
     for (uint i = startIndex; i < endIndex; ++i) {
         uint childIdx = sortedIndices[i];
-        OctreeLeafNode child = childNodes[childIdx];
+        OctreeLeafNode child = nodeBuffer[inputNodeStart + childIdx];
 
         centerOfMassSum += child.centerOfMass * child.totalMass;
         totalMass += child.totalMass;
@@ -144,9 +147,9 @@ kernel void aggregateNodes(
         }
     }
 
-    device OctreeLeafNode& parentNode = parentNodes[nodeIndex];
+    device OctreeLeafNode& parentNode = nodeBuffer[outputNodeStart + nodeIndex];
     parentNode.mortonCode = parentMortonCode;
-    parentMortonCodes[nodeIndex] = parentMortonCode;
+    // parentMortonCodes[nodeIndex] = parentMortonCode; // If you want to store parent morton codes separately
 
     if (totalMass > 0.0f) {
         parentNode.centerOfMass = centerOfMassSum / totalMass;

@@ -14,7 +14,7 @@ struct ContentView: NSViewRepresentable {
         mtkView.preferredFramesPerSecond = 120 // Lowered slightly, PP is expensive
         mtkView.enableSetNeedsDisplay = false
         mtkView.isPaused = false
-        mtkView.depthStencilPixelFormat = .depth32Float // Keep
+        mtkView.depthStencilPixelFormat = .invalid // Prevent MTKView from allocating unused depth texture
         mtkView.colorPixelFormat = .rgba16Float // Ensure this matches textures/pipelines
         mtkView.framebufferOnly = false  // Needs to be false for drawable texture access? Check if true works. Often false needed if view provides drawable texture. Let's keep false.
 
@@ -27,7 +27,7 @@ struct ContentView: NSViewRepresentable {
         }
 
         // Ensure depth texture is created (needed for scene pass)
-        mtkView.depthStencilPixelFormat = .depth32Float
+        // mtkView.depthStencilPixelFormat = .depth32Float // This line is removed as per the edit hint.
 
         guard let metalDevice = MTLCreateSystemDefaultDevice() else {
             fatalError("Metal device creation failed")

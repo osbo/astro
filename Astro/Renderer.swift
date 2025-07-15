@@ -8,6 +8,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var commandQueue: MTLCommandQueue!
     var depthStencilState: MTLDepthStencilState!
     var sceneTexture: MTLTexture!
+    var depthTexture: MTLTexture! // Add this line
     var currentDrawableSize: CGSize = .zero
     var textureSampler: MTLSamplerState!
     
@@ -19,7 +20,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
     var numPlanets: Int32 = 10
-    var numDust: Int32 = 100000
+    var numDust: Int32 = 100
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -59,6 +60,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var generateMortonCodesPipelineState: MTLComputePipelineState!
     var aggregateLeafNodesPipelineState: MTLComputePipelineState!
     var countUniqueMortonCodesPipelineState: MTLComputePipelineState!
+    var aggregateNodesPipelineState: MTLComputePipelineState!
     
     var radixSorter: MetalKernelsRadixSort!
 
@@ -122,11 +124,22 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     private func setupOffscreenTextures(size: CGSize) {
-        let fullResDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: Int(size.width), height: Int(size.height), mipmapped: false)
-        fullResDesc.storageMode = .private
-        fullResDesc.usage = [.renderTarget, .shaderRead]
-        sceneTexture = device.makeTexture(descriptor: fullResDesc)
-        sceneTexture.label = "Scene Texture"
+        // Only create sceneTexture if post-processing is enabled
+        if usePostProcessing {
+            let fullResDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: Int(size.width), height: Int(size.height), mipmapped: false)
+            fullResDesc.storageMode = .private
+            fullResDesc.usage = [.renderTarget, .shaderRead]
+            sceneTexture = device.makeTexture(descriptor: fullResDesc)
+            sceneTexture.label = "Scene Texture"
+        } else {
+            sceneTexture = nil
+        }
+        // Always create a custom .memoryless depth texture
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: Int(size.width), height: Int(size.height), mipmapped: false)
+        depthDesc.storageMode = .memoryless
+        depthDesc.usage = [.renderTarget]
+        depthTexture = device.makeTexture(descriptor: depthDesc)
+        depthTexture.label = "Custom Depth Texture"
     }
     
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
@@ -170,6 +183,9 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let countUniqueMortonCodesFunction = library.makeFunction(name: "countUniqueMortonCodes") else {
             fatalError("Could not find countUniqueMortonCodes function in Octree.metal.")
         }
+        guard let aggregateNodesFunction = library.makeFunction(name: "aggregateNodes") else {
+            fatalError("Could not find aggregateNodes function in Octree.metal.")
+        }
         
 
         let spherePipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -210,6 +226,7 @@ class Renderer: NSObject, MTKViewDelegate {
             generateMortonCodesPipelineState = try device.makeComputePipelineState(function: generateMortonCodesFunction)
             aggregateLeafNodesPipelineState = try device.makeComputePipelineState(function: aggregateLeafNodesFunction)
             countUniqueMortonCodesPipelineState = try device.makeComputePipelineState(function: countUniqueMortonCodesFunction)
+            aggregateNodesPipelineState = try device.makeComputePipelineState(function: aggregateNodesFunction)
         } catch {
             fatalError("Failed to create pipeline state: \(error)")
         }
@@ -333,35 +350,25 @@ class Renderer: NSObject, MTKViewDelegate {
         if numSpheres > 0 {
             // Generate Morton codes for all particles at the beginning of every frame
             generateMortonCodes(commandBuffer: commandBuffer)
-            print("numSpheres: \(numSpheres)")
             
             // Sort the Morton codes
             radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: UInt32(numSpheres))
             
             // Count unique morton codes
             countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false)
-            var uniqueLeafNodeCount = uniqueMortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
-            print("Unique leaf node count after counting: \(uniqueLeafNodeCount)")
             
             // Aggregate leaf nodes
             aggregateLeafNodes(commandBuffer: commandBuffer)
             
-            // Sort the leaf morton codes
-            var numChildren = uniqueMortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
-            print("numChildren: \(numChildren)")
-            while numChildren > 1 {
-                radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: numChildren)
-                countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true)
-                numChildren = uniqueMortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
-                print("numChildren: \(numChildren)")
-            }
+            // Build internal nodes
+            buildInternalNodes(commandBuffer: commandBuffer, uniqueLeafNodeCount: UInt32(numSpheres))
         }
         
         if usePostProcessing {
-            renderScene(commandBuffer: commandBuffer, view: view)
-            postProcess(commandBuffer: commandBuffer, source: sceneTexture, screenPassDescriptor: screenRenderPassDescriptor)
+            renderScene(commandBuffer: commandBuffer)
+            postProcess(commandBuffer: commandBuffer, source: sceneTexture!, screenPassDescriptor: screenRenderPassDescriptor)
         } else {
-            renderSceneDirect(commandBuffer: commandBuffer, view: view, screenPassDescriptor: screenRenderPassDescriptor)
+            renderSceneDirect(commandBuffer: commandBuffer, screenPassDescriptor: screenRenderPassDescriptor)
         }
         
         commandBuffer.present(drawable)
@@ -432,64 +439,105 @@ class Renderer: NSObject, MTKViewDelegate {
         let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
-        
-//         debugPrintMortonCodes()
     }
     
-    func debugPrintMortonCodes() {
-        guard let mortonBuffer = mortonCodesBuffer,
-              let indicesBuffer = indicesBuffer else { return }
-        
-        let mortonPointer = mortonBuffer.contents().bindMemory(to: UInt64.self, capacity: Int(numSpheres))
-        let indicesPointer = indicesBuffer.contents().bindMemory(to: UInt32.self, capacity: Int(numSpheres))
-        let positionPointer = positionMassBuffer.contents().bindMemory(to: PositionMass.self, capacity: Int(numSpheres))
-        
-        let numToPrint = min(10, Int(numSpheres))
-        print("=== First \(numToPrint) Morton Codes ===")
-        
-        for i in 0..<numToPrint {
-            let mortonCode = mortonPointer[i]
-            let particleIndex = indicesPointer[i]
-            let position = positionPointer[i]
-            
-            print("Particle \(i):")
-            print("  Morton Code: \(mortonCode)")
-            print("  Particle Index: \(particleIndex)")
-            print("  Position: (\(position.position.x), \(position.position.y), \(position.position.z))")
-            print("  Mass: \(position.mass)")
-            print("---")
+    func buildInternalNodes(commandBuffer: MTLCommandBuffer, uniqueLeafNodeCount: UInt32) {
+        let maxPasses = Int(ceil(log2(Double(numSpheres))))
+        let octreeNodeCount = 2 * Int(numSpheres) - 1
+        let nodeBuffer = octreeNodesBuffer!
+        let maxNodes = octreeNodeCount
+        let indexBufferA = device.makeBuffer(length: MemoryLayout<UInt32>.stride * maxNodes, options: .storageModeShared)!
+        let indexBufferB = device.makeBuffer(length: MemoryLayout<UInt32>.stride * maxNodes, options: .storageModeShared)!
+        let mortonBufferA = device.makeBuffer(length: MemoryLayout<UInt64>.stride * maxNodes, options: .storageModeShared)!
+        let mortonBufferB = device.makeBuffer(length: MemoryLayout<UInt64>.stride * maxNodes, options: .storageModeShared)!
+
+        // Initialize indexBufferA with [0, 1, ..., numLeaves-1]
+        let numLeaves = Int(numSpheres)
+        let indices = (0..<numLeaves).map { UInt32($0) }
+        indexBufferA.contents().copyMemory(from: indices, byteCount: MemoryLayout<UInt32>.stride * numLeaves)
+
+        var currentStart = 0
+        var currentCount = numLeaves
+        var nextStart = numLeaves
+        var pass = 0
+        var layerShift: UInt32 = 3
+        var idxIn = indexBufferA
+        var idxOut = indexBufferB
+        var mortonIn = mortonBufferA
+        var mortonOut = mortonBufferB
+        while currentCount > 1 && pass < maxPasses {
+            // 1. Sort morton codes and indices for current level
+            radixSorter.sort(commandBuffer: commandBuffer, input: mortonIn, inputIndices: idxIn, output: mortonOut, outputIndices: idxOut, length: UInt32(currentCount))
+            // 2. Count unique parent codes (aggregate: true)
+            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true)
+            // 3. Prepare output index buffer for next level
+            let nextCount = max(1, (currentCount + 7) / 8)
+            let nextIndices = (nextStart..<(nextStart+nextCount)).map { UInt32($0) }
+            idxOut.contents().copyMemory(from: nextIndices, byteCount: MemoryLayout<UInt32>.stride * nextCount)
+            // 4. Aggregate nodes: kernel writes to nodeBuffer[nextStart..nextStart+nextCount]
+            if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
+                computeEncoder.label = "Aggregate Internal Nodes"
+                computeEncoder.setComputePipelineState(aggregateNodesPipelineState)
+                computeEncoder.setBuffer(mortonOut, offset: 0, index: 0)
+                computeEncoder.setBuffer(idxOut, offset: 0, index: 1)
+                computeEncoder.setBuffer(nodeBuffer, offset: 0, index: 2) // all nodes in one buffer
+                computeEncoder.setBuffer(mortonIn, offset: 0, index: 3)
+                computeEncoder.setBuffer(uniqueMortonCodeCountBuffer, offset: 0, index: 4)
+                computeEncoder.setBuffer(uniqueMortonCodeStartIndicesBuffer, offset: 0, index: 5)
+                var numChildren = UInt32(currentCount)
+                var inputNodeStart = UInt32(currentStart)
+                var outputNodeStart = UInt32(nextStart)
+                computeEncoder.setBytes(&numChildren, length: MemoryLayout<UInt32>.size, index: 6)
+                computeEncoder.setBytes(&inputNodeStart, length: MemoryLayout<UInt32>.size, index: 7)
+                computeEncoder.setBytes(&outputNodeStart, length: MemoryLayout<UInt32>.size, index: 8)
+                computeEncoder.setBytes(&layerShift, length: MemoryLayout<UInt32>.size, index: 9)
+                let threadGroupSize = MTLSizeMake(64, 1, 1)
+                let threadGroups = MTLSizeMake((currentCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+                computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+                computeEncoder.endEncoding()
+            }
+            // Swap index/morton buffers for next pass
+            swap(&idxIn, &idxOut)
+            swap(&mortonIn, &mortonOut)
+            currentStart = nextStart
+            currentCount = nextCount
+            nextStart += nextCount
+            pass += 1
+            layerShift += 3
         }
-        print("================================")
     }
     
-    func renderScene(commandBuffer: MTLCommandBuffer, view: MTKView) {
+    func renderScene(commandBuffer: MTLCommandBuffer) {
         let sceneRenderPassDescriptor = MTLRenderPassDescriptor()
         sceneRenderPassDescriptor.colorAttachments[0].texture = sceneTexture
         sceneRenderPassDescriptor.colorAttachments[0].loadAction = .clear
         sceneRenderPassDescriptor.colorAttachments[0].storeAction = .store
         sceneRenderPassDescriptor.colorAttachments[0].clearColor = backgroundColor
-        
-        if let depthTex = view.depthStencilTexture {
-            sceneRenderPassDescriptor.depthAttachment.texture = depthTex
-            sceneRenderPassDescriptor.depthAttachment.loadAction = .clear
-            sceneRenderPassDescriptor.depthAttachment.storeAction = .dontCare
-            sceneRenderPassDescriptor.depthAttachment.clearDepth = 1.0
-        }
-        
+
+        // Use custom depth texture
+        sceneRenderPassDescriptor.depthAttachment.texture = depthTexture
+        sceneRenderPassDescriptor.depthAttachment.loadAction = .clear
+        sceneRenderPassDescriptor.depthAttachment.storeAction = .dontCare
+        sceneRenderPassDescriptor.depthAttachment.clearDepth = 1.0
+
         renderSceneToPass(commandBuffer: commandBuffer, renderPassDescriptor: sceneRenderPassDescriptor, label: "Scene Render Pass")
     }
     
-    func renderSceneDirect(commandBuffer: MTLCommandBuffer, view: MTKView, screenPassDescriptor: MTLRenderPassDescriptor) {
+    func renderSceneDirect(commandBuffer: MTLCommandBuffer, screenPassDescriptor: MTLRenderPassDescriptor) {
         // Set the clear color for direct rendering
         screenPassDescriptor.colorAttachments[0].clearColor = backgroundColor
-        
+        // Do not attach a depth texture to the screen pass
+        screenPassDescriptor.depthAttachment.texture = nil
         renderSceneToPass(commandBuffer: commandBuffer, renderPassDescriptor: screenPassDescriptor, label: "Direct Scene Render Pass")
     }
     
     private func renderSceneToPass(commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor, label: String) {
         guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { return }
         renderEncoder.label = label
-        renderEncoder.setDepthStencilState(depthStencilState)
+        // Only set depthStencilState if a depth texture is attached
+        if let depthAttachment = renderPassDescriptor.depthAttachment, depthAttachment.texture != nil {
+            renderEncoder.setDepthStencilState(depthStencilState)
+        }
         renderEncoder.setCullMode(.back)
         
         renderEncoder.setVertexBuffer(globalUniformsBuffer, offset: 0, index: 1)
@@ -535,6 +583,7 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     private func postProcess(commandBuffer: MTLCommandBuffer, source: MTLTexture, screenPassDescriptor: MTLRenderPassDescriptor) {
+        // No depth for post-process pass
         screenPassDescriptor.depthAttachment.texture = nil
 
         guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: screenPassDescriptor) else { return }
