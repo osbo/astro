@@ -98,32 +98,30 @@ struct ContentView: NSViewRepresentable {
             let delta = CGPoint(x: current.x - last.x, y: current.y - last.y)
             lastDragLocation = current
 
-            let sensitivity: Float = 0.005
-            renderer.camera.yaw   -= Float(delta.x) * sensitivity
-            renderer.camera.pitch += Float(delta.y) * sensitivity
-            renderer.camera.pitch = max(-.pi/2 + 0.01, min(.pi/2 - 0.01, renderer.camera.pitch))
+            let sensitivity: Double = 0.005
+            renderer.camera.yaw   -= Double(delta.x) * sensitivity
+            renderer.camera.pitch += Double(delta.y) * sensitivity
+            renderer.camera.pitch = max(-Double.pi/2 + 0.01, min(Double.pi/2 - 0.01, renderer.camera.pitch))
         }
 
         override func scrollWheel(with event: NSEvent) {
             let scrollAmount = event.deltaY
             let zoomSensitivity: Float = 50 * 104.8575 // scale up
-            // Move target and position together for smoother zoom
-            let moveVector = renderer.camera.forward * Float(scrollAmount) * zoomSensitivity
+            let moveVector = renderer.camera.forward * Double(scrollAmount) * Double(zoomSensitivity)
             renderer.camera.targetPosition += moveVector
-           // renderer.camera.position += moveVector // Let the update lerp handle position
         }
 
         override func keyDown(with event: NSEvent) {
             let speed: Float = 200 * 104.8575 // scale up
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "w":
-                renderer.camera.targetPosition += renderer.camera.up * speed
+                renderer.camera.targetPosition += renderer.camera.up * Double(speed)
             case "s":
-                renderer.camera.targetPosition -= renderer.camera.up * speed
+                renderer.camera.targetPosition -= renderer.camera.up * Double(speed)
             case "a":
-                renderer.camera.targetPosition -= renderer.camera.right * speed
+                renderer.camera.targetPosition -= renderer.camera.right * Double(speed)
             case "d":
-                renderer.camera.targetPosition += renderer.camera.right * speed
+                renderer.camera.targetPosition += renderer.camera.right * Double(speed)
             case "r":
                 if !event.isARepeat {
                     renderer.resetSimulation()

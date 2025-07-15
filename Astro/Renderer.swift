@@ -26,14 +26,14 @@ class Renderer: NSObject, MTKViewDelegate {
         return numStars + numPlanets + numDust
     }
     
-    var starRadius: Float = 25000.0 // 500 * (1_048_575 / 10_000)
-    var planetRadius: Float = 5000.0 // 100 * (1_048_575 / 10_000)
+    var starRadius: Float = 50000.0 // 500 * (1_048_575 / 10_000)
+    var planetRadius: Float = 10000.0 // 100 * (1_048_575 / 10_000)
     var dustRadius: Float = 1
     var starMass: Float = 1000000 // 1_000_000 * (1_048_575 / 10_000)
     var planetMass: Float = 10000 // 10_000 * (1_048_575 / 10_000)
     var dustMass: Float = 100 // 100 * (1_048_575 / 10_000)
     var initialVelocityMaximum: Float = 5000 // 50 * (1_048_575 / 10_000)
-    var spawnBounds: Float = 500000
+    var spawnBounds: Float = 1000000
     var backgroundColor: MTLClearColor = MTLClearColor(red: 1/255, green: 1/255, blue: 2/255, alpha: 1.0)
     
     // --- Metal Objects ---
@@ -63,6 +63,12 @@ class Renderer: NSObject, MTKViewDelegate {
     var aggregateNodesPipelineState: MTLComputePipelineState!
     
     var radixSorter: MetalKernelsRadixSort!
+
+    // Floating origin: store world positions as double
+    var doublePositions: [SIMD3<Double>] = []
+    var positions: [PositionMass] = []
+    var velocities: [VelocityRadius] = []
+    var colors: [ColorType] = []
 
     init(_ parent: ContentView) {
         self.parent = parent
@@ -110,8 +116,8 @@ class Renderer: NSObject, MTKViewDelegate {
     private func updateGlobalUniforms() {
         guard currentDrawableSize.width > 0 && currentDrawableSize.height > 0 else { return }
         let pointer = globalUniformsBuffer.contents().bindMemory(to: GlobalUniforms.self, capacity: 1)
-        pointer[0].viewMatrix = camera.viewMatrix()
-        pointer[0].cameraPosition = camera.position
+        pointer[0].viewMatrix = camera.floatViewMatrix()
+        pointer[0].cameraPosition = camera.floatPosition
         let aspect = Float(currentDrawableSize.width) / Float(currentDrawableSize.height)
         pointer[0].projectionMatrix = createProjectionMatrix(fov: .pi/2.5, aspect: aspect, near: 10.0, far: 10000000.0)
     }
@@ -274,60 +280,54 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     func makeSpheres() {
-        var positions: [PositionMass] = []
-        var velocities: [VelocityRadius] = []
-        var colors: [ColorType] = []
-        
+        positions = []
+        velocities = []
+        colors = []
+        doublePositions = []
         for i in 0..<numSpheres {
-            let position = simd_float3(
-                Float.random(in: -spawnBounds...spawnBounds),
-                Float.random(in: -spawnBounds...spawnBounds),
-                Float.random(in: -spawnBounds...spawnBounds)
+            let position = SIMD3<Double>(
+                Double.random(in: -Double(spawnBounds)...Double(spawnBounds)),
+                Double.random(in: -Double(spawnBounds)...Double(spawnBounds)),
+                Double.random(in: -Double(spawnBounds)...Double(spawnBounds))
             )
+            doublePositions.append(position)
             let velocity = simd_float3(
                 Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
                 Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
                 Float.random(in: -initialVelocityMaximum...initialVelocityMaximum)
             )
-            
             var type: UInt32 = 0
             var mass: Float = 0
             var radius: Float = 0
             var color: simd_float4 = simd_float4(0,0,0,1)
-
             if i < numStars {
                 type = 0
                 mass = starMass
                 radius = starRadius
-                
-                // Distribute star colors across the OKLab spectrum
                 let hue = Float(i) / Float(numStars)
                 let oklabColor = simd_float3(0.8, 0.2 * cos(2 * .pi * hue), 0.2 * sin(2 * .pi * hue))
                 let srgbColor = oklabToSrgb(oklab: oklabColor)
                 color = simd_float4(srgbColor.x, srgbColor.y, srgbColor.z, 1.0)
-
             } else if i < numStars + numPlanets {
                 type = 1
                 mass = planetMass
                 radius = planetRadius
-                color = simd_float4(0, 0, 0, 1) // Black for planets
+                color = simd_float4(0, 0, 0, 1)
             } else {
                 type = 2
                 mass = dustMass
                 radius = dustRadius
-                color = simd_float4(0, 0, 0, 0) // Transparent for dust
+                color = simd_float4(0, 0, 0, 0)
             }
-            
-            positions.append(PositionMass(position: position, mass: mass))
+            // Store world position directly
+            positions.append(PositionMass(position: simd_float3(Float(position.x), Float(position.y), Float(position.z)), mass: mass))
             velocities.append(VelocityRadius(velocity: velocity, radius: radius))
             colors.append(ColorType(color: color, type: type))
         }
-        
+        // Initial upload
         positionMassBuffer.contents().copyMemory(from: positions, byteCount: MemoryLayout<PositionMass>.stride * positions.count)
         velocityRadiusBuffer.contents().copyMemory(from: velocities, byteCount: MemoryLayout<VelocityRadius>.stride * velocities.count)
         colorTypeBuffer.contents().copyMemory(from: colors, byteCount: MemoryLayout<ColorType>.stride * colors.count)
-        
-        // Initialize indices buffer with sequential indices
         let indices = Array(0..<numSpheres).map { UInt32($0) }
         indicesBuffer.contents().copyMemory(from: indices, byteCount: MemoryLayout<UInt32>.stride * indices.count)
     }
@@ -336,12 +336,12 @@ class Renderer: NSObject, MTKViewDelegate {
         guard pipelinesCreated,
               let drawable = view.currentDrawable,
               let screenRenderPassDescriptor = view.currentRenderPassDescriptor else { return }
-
         let systemTime = CFAbsoluteTimeGetCurrent()
         let deltaTime = min(Float(systemTime - lastFrameTime), 1.0 / 30.0)
         lastFrameTime = systemTime
         currentTime += deltaTime
         camera.update(deltaTime: deltaTime)
+        // No per-frame CPU offset for floating origin
         updateGlobalUniforms()
         
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }

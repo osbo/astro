@@ -32,7 +32,8 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
     ColorType colorData = colors[instanceID];
 
     float3 worldPosition = (in.position * velocityData.radius) + positionData.position;
-    out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(worldPosition, 1.0);
+    float3 relPosition = worldPosition - globalUniforms.cameraPosition;
+    out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(relPosition, 1.0);
     out.color = colorData.color;
     
     return out;
@@ -51,7 +52,8 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
     ColorType colorData = colors[instanceID];
 
     float3 particleCenterWorld = positionData.position;
-    out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(particleCenterWorld, 1.0);
+    float3 relPosition = particleCenterWorld - globalUniforms.cameraPosition;
+    out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(relPosition, 1.0);
     out.pointSize = velocityData.radius;
     
     // Set alpha based on brightness
