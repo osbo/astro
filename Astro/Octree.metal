@@ -33,9 +33,10 @@ kernel void aggregateLeafNodes(
     device const PositionMass* positionMassBuffer [[buffer(2)]],
     device const ColorType* colorTypeBuffer [[buffer(3)]],
     device OctreeLeafNode* octreeLeafNodes [[buffer(4)]],
-    device const uint* uniqueMortonCodeCount [[buffer(5)]],
-    device const uint* uniqueMortonCodeStartIndices [[buffer(6)]],
-    constant uint& numSpheres [[buffer(7)]],
+    device ulong* nodeMortonCodes [[buffer(5)]],
+    device const uint* uniqueMortonCodeCount [[buffer(6)]],
+    device const uint* uniqueMortonCodeStartIndices [[buffer(7)]],
+    constant uint& numSpheres [[buffer(8)]],
     uint nodeIndex [[thread_position_in_grid]])
 {
     uint uniqueCount = uniqueMortonCodeCount[0];
@@ -81,6 +82,7 @@ kernel void aggregateLeafNodes(
     // Calculate averages and store in the leaf node
     device OctreeLeafNode& leafNode = octreeLeafNodes[nodeIndex];
     leafNode.mortonCode = currentMortonCode;
+    nodeMortonCodes[nodeIndex] = currentMortonCode;
 
     if (totalMass > 0.0f) {
         leafNode.centerOfMass = centerOfMassSum / totalMass;
@@ -94,4 +96,12 @@ kernel void aggregateLeafNodes(
         leafNode.emittedColor = float4(0.0);
         leafNode.emittedColorCenter = float3(0.0);
     }
+}
+
+kernel void extractMortonCodes(
+    device const OctreeLeafNode* octreeNodes [[buffer(0)]],
+    device ulong* mortonCodes [[buffer(1)]],
+    uint gid [[thread_position_in_grid]])
+{
+    mortonCodes[gid] = octreeNodes[gid].mortonCode;
 }

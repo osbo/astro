@@ -59,6 +59,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var generateMortonCodesPipelineState: MTLComputePipelineState!
     var aggregateLeafNodesPipelineState: MTLComputePipelineState!
     var countUniqueMortonCodesPipelineState: MTLComputePipelineState!
+    
     var radixSorter: MetalKernelsRadixSort!
 
     init(_ parent: ContentView) {
@@ -169,6 +170,7 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let countUniqueMortonCodesFunction = library.makeFunction(name: "countUniqueMortonCodes") else {
             fatalError("Could not find countUniqueMortonCodes function in Octree.metal.")
         }
+        
 
         let spherePipelineDescriptor = MTLRenderPipelineDescriptor()
         spherePipelineDescriptor.label = "Sphere Render Pipeline"
@@ -340,6 +342,13 @@ class Renderer: NSObject, MTKViewDelegate {
             
             // Aggregate leaf nodes
             aggregateLeafNodes(commandBuffer: commandBuffer)
+            
+            // Sort the leaf morton codes
+            var numChildren = uniqueMortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
+            while numChildren > 1 {
+                radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: numChildren)
+                break
+            }
         }
         
         if usePostProcessing {
@@ -402,11 +411,12 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 2)
         computeEncoder.setBuffer(colorTypeBuffer, offset: 0, index: 3)
         computeEncoder.setBuffer(octreeNodesBuffer, offset: 0, index: 4)
-        computeEncoder.setBuffer(uniqueMortonCodeCountBuffer, offset: 0, index: 5)
-        computeEncoder.setBuffer(uniqueMortonCodeStartIndicesBuffer, offset: 0, index: 6)
+        computeEncoder.setBuffer(mortonCodesBuffer, offset: 0, index: 5)
+        computeEncoder.setBuffer(uniqueMortonCodeCountBuffer, offset: 0, index: 6)
+        computeEncoder.setBuffer(uniqueMortonCodeStartIndicesBuffer, offset: 0, index: 7)
         
         var numSpheresVal = UInt32(numSpheres)
-        computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 7)
+        computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 8)
         
         // Dispatch enough threads for the worst-case scenario (one leaf node per sphere).
         // The kernel will check the actual unique count and exit early if needed.
