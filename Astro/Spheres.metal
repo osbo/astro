@@ -63,5 +63,6 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
 
 fragment float4 fragment_shader(VertexOut in [[stage_in]])
 {
-    return in.color;
+//    return in.color;
+    return (1,1,1,1);
 }

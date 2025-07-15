@@ -106,7 +106,7 @@ struct ContentView: NSViewRepresentable {
 
         override func scrollWheel(with event: NSEvent) {
             let scrollAmount = event.deltaY
-            let zoomSensitivity: Float = 50
+            let zoomSensitivity: Float = 50 * 104.8575 // scale up
             // Move target and position together for smoother zoom
             let moveVector = renderer.camera.forward * Float(scrollAmount) * zoomSensitivity
             renderer.camera.targetPosition += moveVector
@@ -114,7 +114,7 @@ struct ContentView: NSViewRepresentable {
         }
 
         override func keyDown(with event: NSEvent) {
-            let speed: Float = 200
+            let speed: Float = 200 * 104.8575 // scale up
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "w":
                 renderer.camera.targetPosition += renderer.camera.up * speed

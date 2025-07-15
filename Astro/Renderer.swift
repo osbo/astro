@@ -19,21 +19,21 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
-    var numPlanets: Int32 = 10
-    var numDust: Int32 = 100
+    var numPlanets: Int32 = 100
+    var numDust: Int32 = 1000000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
     }
     
-    var starRadius: Int32 = 500
-    var planetRadius: Int32 = 100
-    var dustRadius: Int32 = 1
-    var starMass: Int32 = 100000
-    var planetMass: Int32 = 1000
-    var dustMass: Int32 = 10
-    var initialVelocityMaximum: Int32 = 50
-    var spawnBounds: Int32 = 10000
+    var starRadius: Float = 25000.0 // 500 * (1_048_575 / 10_000)
+    var planetRadius: Float = 5000.0 // 100 * (1_048_575 / 10_000)
+    var dustRadius: Float = 1
+    var starMass: Float = 1000000 // 1_000_000 * (1_048_575 / 10_000)
+    var planetMass: Float = 10000 // 10_000 * (1_048_575 / 10_000)
+    var dustMass: Float = 100 // 100 * (1_048_575 / 10_000)
+    var initialVelocityMaximum: Float = 5000 // 50 * (1_048_575 / 10_000)
+    var spawnBounds: Float = 500000
     var backgroundColor: MTLClearColor = MTLClearColor(red: 1/255, green: 1/255, blue: 2/255, alpha: 1.0)
     
     // --- Metal Objects ---
@@ -113,7 +113,7 @@ class Renderer: NSObject, MTKViewDelegate {
         pointer[0].viewMatrix = camera.viewMatrix()
         pointer[0].cameraPosition = camera.position
         let aspect = Float(currentDrawableSize.width) / Float(currentDrawableSize.height)
-        pointer[0].projectionMatrix = createProjectionMatrix(fov: .pi/2.5, aspect: aspect, near: 10.0, far: 500000.0)
+        pointer[0].projectionMatrix = createProjectionMatrix(fov: .pi/2.5, aspect: aspect, near: 10.0, far: 10000000.0)
     }
     
     private func createTextureSampler(device: MTLDevice) {
@@ -280,14 +280,14 @@ class Renderer: NSObject, MTKViewDelegate {
         
         for i in 0..<numSpheres {
             let position = simd_float3(
-                Float(Int32.random(in: -spawnBounds...spawnBounds)),
-                Float(Int32.random(in: -spawnBounds...spawnBounds)),
-                Float(Int32.random(in: -spawnBounds...spawnBounds))
+                Float.random(in: -spawnBounds...spawnBounds),
+                Float.random(in: -spawnBounds...spawnBounds),
+                Float.random(in: -spawnBounds...spawnBounds)
             )
             let velocity = simd_float3(
-                Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)),
-                Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)),
-                Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum))
+                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
+                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
+                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum)
             )
             
             var type: UInt32 = 0
@@ -297,8 +297,8 @@ class Renderer: NSObject, MTKViewDelegate {
 
             if i < numStars {
                 type = 0
-                mass = Float(starMass)
-                radius = Float(starRadius)
+                mass = starMass
+                radius = starRadius
                 
                 // Distribute star colors across the OKLab spectrum
                 let hue = Float(i) / Float(numStars)
@@ -308,13 +308,13 @@ class Renderer: NSObject, MTKViewDelegate {
 
             } else if i < numStars + numPlanets {
                 type = 1
-                mass = Float(planetMass)
-                radius = Float(planetRadius)
+                mass = planetMass
+                radius = planetRadius
                 color = simd_float4(0, 0, 0, 1) // Black for planets
             } else {
                 type = 2
-                mass = Float(dustMass)
-                radius = Float(dustRadius)
+                mass = dustMass
+                radius = dustRadius
                 color = simd_float4(0, 0, 0, 0) // Transparent for dust
             }
             
@@ -347,22 +347,22 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
         commandBuffer.label = "Main Command Buffer"
         
-        if numSpheres > 0 {
-            // Generate Morton codes for all particles at the beginning of every frame
-            generateMortonCodes(commandBuffer: commandBuffer)
-            
-            // Sort the Morton codes
-            radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: UInt32(numSpheres))
-            
-            // Count unique morton codes
-            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false)
-            
-            // Aggregate leaf nodes
-            aggregateLeafNodes(commandBuffer: commandBuffer)
-            
-            // Build internal nodes
-            buildInternalNodes(commandBuffer: commandBuffer, uniqueLeafNodeCount: UInt32(numSpheres))
-        }
+//        if numSpheres > 0 {
+//            // Generate Morton codes for all particles at the beginning of every frame
+//            generateMortonCodes(commandBuffer: commandBuffer)
+//            
+//            // Sort the Morton codes
+//            radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: UInt32(numSpheres))
+//            
+//            // Count unique morton codes
+//            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false)
+//            
+//            // Aggregate leaf nodes
+//            aggregateLeafNodes(commandBuffer: commandBuffer)
+//            
+//            // Build internal nodes
+//            buildInternalNodes(commandBuffer: commandBuffer, uniqueLeafNodeCount: UInt32(numSpheres))
+//        }
         
         if usePostProcessing {
             renderScene(commandBuffer: commandBuffer)

@@ -1,8 +1,9 @@
 import simd
+import Foundation
 
 class Camera {
-    var position = SIMD3<Float>(0, 0, 10)
-    var targetPosition = SIMD3<Float>(0, 0, 10)
+    var position = SIMD3<Float>(0, 0, 500)
+    var targetPosition = SIMD3<Float>(0, 0, 500)
     var yaw: Float = .pi
     var pitch: Float = 0
 
