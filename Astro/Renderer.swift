@@ -333,21 +333,27 @@ class Renderer: NSObject, MTKViewDelegate {
         if numSpheres > 0 {
             // Generate Morton codes for all particles at the beginning of every frame
             generateMortonCodes(commandBuffer: commandBuffer)
+            print("numSpheres: \(numSpheres)")
             
             // Sort the Morton codes
             radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: UInt32(numSpheres))
             
             // Count unique morton codes
-            countUniqueMortonCodes(commandBuffer: commandBuffer)
+            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false)
+            var uniqueLeafNodeCount = uniqueMortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
+            print("Unique leaf node count after counting: \(uniqueLeafNodeCount)")
             
             // Aggregate leaf nodes
             aggregateLeafNodes(commandBuffer: commandBuffer)
             
             // Sort the leaf morton codes
             var numChildren = uniqueMortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
+            print("numChildren: \(numChildren)")
             while numChildren > 1 {
                 radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: numChildren)
-                break
+                countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true)
+                numChildren = uniqueMortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
+                print("numChildren: \(numChildren)")
             }
         }
         
@@ -378,7 +384,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.endEncoding()
     }
     
-    func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer) {
+    func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer, aggregate: Bool) {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Count Unique Morton Codes"
         
@@ -389,6 +395,8 @@ class Renderer: NSObject, MTKViewDelegate {
         
         var numSpheresVal = UInt32(numSpheres)
         computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 3)
+        var aggregateVal: UInt32 = aggregate ? 1 : 0
+        computeEncoder.setBytes(&aggregateVal, length: MemoryLayout<UInt32>.size, index: 4)
         
         // Reset the count to 0 before dispatching
         var initialCount: UInt32 = 0

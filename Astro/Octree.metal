@@ -8,6 +8,7 @@ kernel void countUniqueMortonCodes(
     device atomic_uint* uniqueMortonCodeCount [[buffer(1)]],
     device uint* uniqueMortonCodeStartIndices [[buffer(2)]],
     constant uint& numSpheres [[buffer(3)]],
+    constant uint& aggregate [[buffer(4)]],
     uint gid [[thread_position_in_grid]])
 {
     if (gid == 0) {
@@ -18,8 +19,13 @@ kernel void countUniqueMortonCodes(
             uniqueMortonCodeStartIndices[0] = 0;
         }
     } else if (gid < numSpheres) {
-        // Compare with previous element
-        if (sortedMortonCodes[gid] != sortedMortonCodes[gid - 1]) {
+        bool isUnique;
+        if (aggregate == 1) {
+            isUnique = ((sortedMortonCodes[gid] >> 3) != (sortedMortonCodes[gid - 1] >> 3));
+        } else {
+            isUnique = (sortedMortonCodes[gid] != sortedMortonCodes[gid - 1]);
+        }
+        if (isUnique) {
             // Atomically increment the count if the current code is unique
             uint index = atomic_fetch_add_explicit(uniqueMortonCodeCount, 1u, memory_order_relaxed);
             uniqueMortonCodeStartIndices[index] = gid;
@@ -95,6 +101,64 @@ kernel void aggregateLeafNodes(
     } else {
         leafNode.emittedColor = float4(0.0);
         leafNode.emittedColorCenter = float3(0.0);
+    }
+}
+
+kernel void aggregateNodes(
+    device const uint64_t* sortedMortonCodes [[buffer(0)]],
+    device const uint32_t* sortedIndices [[buffer(1)]],
+    device const OctreeLeafNode* childNodes [[buffer(2)]], // could be leaf or parent nodes
+    device OctreeLeafNode* parentNodes [[buffer(3)]],
+    device ulong* parentMortonCodes [[buffer(4)]],
+    device const uint* uniqueMortonCodeCount [[buffer(5)]],
+    device const uint* uniqueMortonCodeStartIndices [[buffer(6)]],
+    constant uint& numChildren [[buffer(7)]],
+    uint nodeIndex [[thread_position_in_grid]])
+{
+    uint uniqueCount = uniqueMortonCodeCount[0];
+    if (nodeIndex >= uniqueCount || uniqueCount <= 1) {
+        return;
+    }
+
+    uint startIndex = uniqueMortonCodeStartIndices[nodeIndex];
+    uint endIndex = (nodeIndex + 1 < uniqueCount) ? uniqueMortonCodeStartIndices[nodeIndex + 1] : numChildren;
+    uint64_t parentMortonCode = sortedMortonCodes[startIndex] >> 3; // parent code is one level up
+
+    // Aggregate data from child nodes
+    float3 centerOfMassSum = float3(0);
+    float totalMass = 0;
+    float4 emittedColorSum = float4(0.0);
+    float3 emittedColorCenter = float3(0);
+    uint emittedColorsCount = 0;
+
+    for (uint i = startIndex; i < endIndex; ++i) {
+        uint childIdx = sortedIndices[i];
+        OctreeLeafNode child = childNodes[childIdx];
+
+        centerOfMassSum += child.centerOfMass * child.totalMass;
+        totalMass += child.totalMass;
+        emittedColorSum += child.emittedColor;
+        emittedColorCenter += child.emittedColorCenter;
+        if (any(child.emittedColor != float4(0.0))) {
+            emittedColorsCount += 1;
+        }
+    }
+
+    device OctreeLeafNode& parentNode = parentNodes[nodeIndex];
+    parentNode.mortonCode = parentMortonCode;
+    parentMortonCodes[nodeIndex] = parentMortonCode;
+
+    if (totalMass > 0.0f) {
+        parentNode.centerOfMass = centerOfMassSum / totalMass;
+    }
+    parentNode.totalMass = totalMass;
+
+    if (emittedColorsCount > 0) {
+        parentNode.emittedColor = emittedColorSum;
+        parentNode.emittedColorCenter = emittedColorCenter / emittedColorsCount;
+    } else {
+        parentNode.emittedColor = float4(0.0);
+        parentNode.emittedColorCenter = float3(0.0);
     }
 }
 
