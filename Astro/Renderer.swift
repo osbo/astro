@@ -19,7 +19,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
     var numPlanets: Int32 = 10
-    var numDust: Int32 = 0
+    var numDust: Int32 = 100000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -51,7 +51,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var indicesBuffer: MTLBuffer!
     var sortedMortonCodesBuffer: MTLBuffer!
     var sortedIndicesBuffer: MTLBuffer!
-    var octreeLeafNodesBuffer: MTLBuffer!
+    var octreeNodesBuffer: MTLBuffer!
     var uniqueMortonCodeCountBuffer: MTLBuffer!
     var uniqueMortonCodeStartIndicesBuffer: MTLBuffer!
 
@@ -240,9 +240,10 @@ class Renderer: NSObject, MTKViewDelegate {
         self.sortedIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
         self.sortedIndicesBuffer.label = "Sorted Indices Buffer"
         
-        // Octree leaf nodes buffer - worst case: one leaf node per sphere
-        self.octreeLeafNodesBuffer = device.makeBuffer(length: MemoryLayout<OctreeLeafNode>.stride * sphereCount, options: .storageModeShared)
-        self.octreeLeafNodesBuffer.label = "Octree Leaf Nodes Buffer"
+        // Octree nodes buffer - worst case: full binary tree with numSpheres leaves
+        let octreeNodeCount = 2 * sphereCount - 1
+        self.octreeNodesBuffer = device.makeBuffer(length: MemoryLayout<OctreeLeafNode>.stride * octreeNodeCount, options: .storageModeShared)
+        self.octreeNodesBuffer.label = "Octree Nodes Buffer"
         
         // Buffer to store the count of unique morton codes
         self.uniqueMortonCodeCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
@@ -400,7 +401,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setBuffer(sortedIndicesBuffer, offset: 0, index: 1)
         computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 2)
         computeEncoder.setBuffer(colorTypeBuffer, offset: 0, index: 3)
-        computeEncoder.setBuffer(octreeLeafNodesBuffer, offset: 0, index: 4)
+        computeEncoder.setBuffer(octreeNodesBuffer, offset: 0, index: 4)
         computeEncoder.setBuffer(uniqueMortonCodeCountBuffer, offset: 0, index: 5)
         computeEncoder.setBuffer(uniqueMortonCodeStartIndicesBuffer, offset: 0, index: 6)
         
