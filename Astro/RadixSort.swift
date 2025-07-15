@@ -47,7 +47,7 @@ class MetalKernelsRadixSort {
               output: MTLBuffer,
               outputIndices: MTLBuffer,
               length: UInt32) {
-        
+        commandBuffer.pushDebugGroup("RadixSort")
         // Validate buffer sizes
         let requiredSize = Int(length) * MemoryLayout<UInt64>.size
         assert(input.length >= requiredSize, "Input buffer too small")
@@ -90,6 +90,7 @@ class MetalKernelsRadixSort {
             blit.copy(from: indicesIn, sourceOffset: 0, to: outputIndices, destinationOffset: 0, size: Int(length) * MemoryLayout<UInt32>.size)
             blit.endEncoding()
         }
+        commandBuffer.popDebugGroup()
     }
 }
 
@@ -100,14 +101,16 @@ class ScanKernel {
     private let prefixSumPipeline: MTLComputePipelineState
     private let prefixFixupPipeline: MTLComputePipelineState
     private let scanThreadgroupsPipeline: MTLComputePipelineState
+    private var auxBuffer: MTLBuffer
+    private var aux2Buffer: MTLBuffer
+    private var auxBufferSize: Int = 0
+    private var aux2BufferSize: Int = 0
     
     init(device: MTLDevice) {
         self.device = device
-        
         guard let library = device.makeDefaultLibrary() else {
             fatalError("Failed to get default Metal library")
         }
-        
         do {
             self.prefixSumPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "prefixSum")!)
             self.prefixFixupPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "prefixFixup")!)
@@ -115,33 +118,42 @@ class ScanKernel {
         } catch {
             fatalError("Failed to create scan pipelines: \(error)")
         }
+        // Pre-allocate with a reasonable default size
+        self.auxBuffer = device.makeBuffer(length: 4096 * MemoryLayout<UInt32>.size, options: .storageModePrivate)!
+        self.aux2Buffer = device.makeBuffer(length: 4096 * MemoryLayout<UInt32>.size, options: .storageModePrivate)!
+        self.auxBufferSize = 4096 * MemoryLayout<UInt32>.size
+        self.aux2BufferSize = 4096 * MemoryLayout<UInt32>.size
+    }
+    
+    func setMaxLength(_ maxLength: UInt32) {
+        let threadgroupSize = 512
+        let numThreadgroups = max(1, (Int(maxLength) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2))
+        let requiredAuxSize = numThreadgroups * MemoryLayout<UInt32>.size
+        if auxBuffer.length < requiredAuxSize {
+            auxBuffer = device.makeBuffer(length: requiredAuxSize, options: .storageModePrivate)!
+            auxBufferSize = requiredAuxSize
+        }
+        if aux2Buffer.length < requiredAuxSize {
+            aux2Buffer = device.makeBuffer(length: requiredAuxSize, options: .storageModePrivate)!
+            aux2BufferSize = requiredAuxSize
+        }
     }
     
     func encodeScanTo(_ commandBuffer: MTLCommandBuffer,
                       input: MTLBuffer,
                       output: MTLBuffer,
                       length: UInt32) {
-
         guard length > 0 else { return }
-
         let threadgroupSize = 512
         var numThreadgroups = (Int(length) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2)
         if numThreadgroups == 0 {
             numThreadgroups = 1
         }
-
         var lengthVar = length
         var zeroff: UInt32 = 1
-
-        if let compute = commandBuffer.makeComputeCommandEncoder() {
-            compute.label = "Scan Operation"
-
-            if numThreadgroups <= 1 {
-                // A single pass is enough.
-                // Still need an aux buffer to satisfy the function signature, even if it's not used for fixup.
-                let auxBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.size, options: .storageModePrivate)!
-                auxBuffer.label = "Scan Aux Buffer (dummy)"
-
+        if numThreadgroups <= 1 {
+            if let compute = commandBuffer.makeComputeCommandEncoder() {
+                compute.label = "Scan Operation"
                 compute.setComputePipelineState(prefixSumPipeline)
                 compute.setBuffer(input, offset: 0, index: ScanBufferIndex.input.rawValue)
                 compute.setBuffer(output, offset: 0, index: ScanBufferIndex.output.rawValue)
@@ -150,13 +162,12 @@ class ScanKernel {
                 compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
                 compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                              threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
-
-            } else {
-                // Multiple threadgroups: requires multi-pass scan
-                let auxBuffer = device.makeBuffer(length: numThreadgroups * MemoryLayout<UInt32>.size, options: .storageModePrivate)!
-                auxBuffer.label = "Scan Aux Buffer"
-
-                // 1. First pass: block-wise scan
+                compute.endEncoding()
+            }
+        } else {
+            // 1. First pass: block-wise scan
+            if let compute = commandBuffer.makeComputeCommandEncoder() {
+                compute.label = "Scan Operation"
                 compute.setComputePipelineState(prefixSumPipeline)
                 compute.setBuffer(input, offset: 0, index: ScanBufferIndex.input.rawValue)
                 compute.setBuffer(output, offset: 0, index: ScanBufferIndex.output.rawValue)
@@ -165,31 +176,33 @@ class ScanKernel {
                 compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
                 compute.dispatchThreadgroups(MTLSize(width: numThreadgroups, height: 1, depth: 1),
                                              threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
-
-                // 2. Second pass: scan the auxiliary buffer. This scan itself could be multi-pass, but we assume it fits in one.
-                var auxLength = UInt32(numThreadgroups)
-                // We need a dummy aux buffer for this second scan pass to satisfy the function signature.
-                let aux2Buffer = device.makeBuffer(length: MemoryLayout<UInt32>.size, options: .storageModePrivate)!
-                aux2Buffer.label = "Scan Aux^2 Buffer (dummy)"
-
+                compute.endEncoding()
+            }
+            // 2. Second pass: scan the auxiliary buffer
+            var auxLength = UInt32(numThreadgroups)
+            if let compute = commandBuffer.makeComputeCommandEncoder() {
+                compute.label = "Scan Operation Aux"
                 compute.setComputePipelineState(prefixSumPipeline)
                 compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.input.rawValue)
-                compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.output.rawValue) // In-place
+                compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.output.rawValue)
                 compute.setBuffer(aux2Buffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
                 compute.setBytes(&auxLength, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.length.rawValue)
                 compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
                 compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                              threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
-
-                // 3. Third pass: fix up the main buffer
+                compute.endEncoding()
+            }
+            // 3. Third pass: fix up the main buffer
+            if let compute = commandBuffer.makeComputeCommandEncoder() {
+                compute.label = "Scan Operation Fixup"
                 compute.setComputePipelineState(prefixFixupPipeline)
                 compute.setBuffer(output, offset: 0, index: ScanBufferIndex.input.rawValue)
                 compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
                 compute.setBytes(&lengthVar, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.length.rawValue)
                 compute.dispatchThreadgroups(MTLSize(width: numThreadgroups, height: 1, depth: 1),
                                              threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
+                compute.endEncoding()
             }
-            compute.endEncoding()
         }
     }
 }

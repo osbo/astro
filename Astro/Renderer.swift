@@ -479,8 +479,12 @@ class Renderer: NSObject, MTKViewDelegate {
         renderEncoder.setVertexBuffer(velocityRadiusBuffer, offset: 0, index: 3)
         renderEncoder.setVertexBuffer(colorTypeBuffer, offset: 0, index: 4)
 
+        var lastPipeline: MTLRenderPipelineState? = nil
         if numStars > 0 {
-            renderEncoder.setRenderPipelineState(spherePipelineState)
+            if lastPipeline !== spherePipelineState {
+                renderEncoder.setRenderPipelineState(spherePipelineState)
+                lastPipeline = spherePipelineState
+            }
             for (index, vertexBuffer) in starSphere.vertexBuffers.enumerated() {
                 renderEncoder.setVertexBuffer(vertexBuffer.buffer, offset: vertexBuffer.offset, index: index)
             }
@@ -489,7 +493,10 @@ class Renderer: NSObject, MTKViewDelegate {
         }
 
         if numPlanets > 0 {
-            renderEncoder.setRenderPipelineState(spherePipelineState)
+            if lastPipeline !== spherePipelineState {
+                renderEncoder.setRenderPipelineState(spherePipelineState)
+                lastPipeline = spherePipelineState
+            }
             for (index, vertexBuffer) in planetSphere.vertexBuffers.enumerated() {
                 renderEncoder.setVertexBuffer(vertexBuffer.buffer, offset: vertexBuffer.offset, index: index)
             }
@@ -498,7 +505,10 @@ class Renderer: NSObject, MTKViewDelegate {
         }
         
         if numDust > 0 {
-            renderEncoder.setRenderPipelineState(dustPipelineState)
+            if lastPipeline !== dustPipelineState {
+                renderEncoder.setRenderPipelineState(dustPipelineState)
+                lastPipeline = dustPipelineState
+            }
             let dustInstanceStart = Int(numStars + numPlanets)
             renderEncoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: 1, instanceCount: Int(numDust), baseInstance: dustInstanceStart)
         }
