@@ -18,8 +18,8 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
-    var numPlanets: Int32 = 100
-    var numDust: Int32 = 1000000
+    var numPlanets: Int32 = 10
+    var numDust: Int32 = 0
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -51,9 +51,14 @@ class Renderer: NSObject, MTKViewDelegate {
     var indicesBuffer: MTLBuffer!
     var sortedMortonCodesBuffer: MTLBuffer!
     var sortedIndicesBuffer: MTLBuffer!
+    var octreeLeafNodesBuffer: MTLBuffer!
+    var uniqueMortonCodeCountBuffer: MTLBuffer!
+    var uniqueMortonCodeStartIndicesBuffer: MTLBuffer!
 
     var pipelinesCreated = false
-    var computePipelineState: MTLComputePipelineState!
+    var generateMortonCodesPipelineState: MTLComputePipelineState!
+    var aggregateLeafNodesPipelineState: MTLComputePipelineState!
+    var countUniqueMortonCodesPipelineState: MTLComputePipelineState!
     var radixSorter: MetalKernelsRadixSort!
 
     init(_ parent: ContentView) {
@@ -158,6 +163,12 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let generateMortonCodesFunction = library.makeFunction(name: "generateMortonCodes") else {
             fatalError("Could not find generateMortonCodes function.")
         }
+        guard let aggregateLeafNodesFunction = library.makeFunction(name: "aggregateLeafNodes") else {
+            fatalError("Could not find aggregateLeafNodes function in Octree.metal.")
+        }
+        guard let countUniqueMortonCodesFunction = library.makeFunction(name: "countUniqueMortonCodes") else {
+            fatalError("Could not find countUniqueMortonCodes function in Octree.metal.")
+        }
 
         let spherePipelineDescriptor = MTLRenderPipelineDescriptor()
         spherePipelineDescriptor.label = "Sphere Render Pipeline"
@@ -194,7 +205,9 @@ class Renderer: NSObject, MTKViewDelegate {
             spherePipelineState = try device.makeRenderPipelineState(descriptor: spherePipelineDescriptor)
             dustPipelineState = try device.makeRenderPipelineState(descriptor: dustPipelineDescriptor)
             postProcessPipelineState = try device.makeRenderPipelineState(descriptor: postProcessPipelineDescriptor)
-            computePipelineState = try device.makeComputePipelineState(function: generateMortonCodesFunction)
+            generateMortonCodesPipelineState = try device.makeComputePipelineState(function: generateMortonCodesFunction)
+            aggregateLeafNodesPipelineState = try device.makeComputePipelineState(function: aggregateLeafNodesFunction)
+            countUniqueMortonCodesPipelineState = try device.makeComputePipelineState(function: countUniqueMortonCodesFunction)
         } catch {
             fatalError("Failed to create pipeline state: \(error)")
         }
@@ -226,6 +239,18 @@ class Renderer: NSObject, MTKViewDelegate {
         
         self.sortedIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
         self.sortedIndicesBuffer.label = "Sorted Indices Buffer"
+        
+        // Octree leaf nodes buffer - worst case: one leaf node per sphere
+        self.octreeLeafNodesBuffer = device.makeBuffer(length: MemoryLayout<OctreeLeafNode>.stride * sphereCount, options: .storageModeShared)
+        self.octreeLeafNodesBuffer.label = "Octree Leaf Nodes Buffer"
+        
+        // Buffer to store the count of unique morton codes
+        self.uniqueMortonCodeCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
+        self.uniqueMortonCodeCountBuffer.label = "Unique Morton Code Count Buffer"
+        
+        // Buffer to store the starting indices of unique morton codes
+        self.uniqueMortonCodeStartIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.uniqueMortonCodeStartIndicesBuffer.label = "Unique Morton Code Start Indices Buffer"
     }
     
     func makeSpheres() {
@@ -234,8 +259,16 @@ class Renderer: NSObject, MTKViewDelegate {
         var colors: [ColorType] = []
         
         for i in 0..<numSpheres {
-            let position = simd_float3(Float(Int32.random(in: -spawnBounds...spawnBounds)), Float(Int32.random(in: -spawnBounds...spawnBounds)), Float(Int32.random(in: -spawnBounds...spawnBounds)))
-            let velocity = simd_float3(Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)), Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)), Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)))
+            let position = simd_float3(
+                Float(Int32.random(in: -spawnBounds...spawnBounds)),
+                Float(Int32.random(in: -spawnBounds...spawnBounds)),
+                Float(Int32.random(in: -spawnBounds...spawnBounds))
+            )
+            let velocity = simd_float3(
+                Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)),
+                Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum)),
+                Float(Int32.random(in: -initialVelocityMaximum...initialVelocityMaximum))
+            )
             
             var type: UInt32 = 0
             var mass: Float = 0
@@ -294,11 +327,19 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
         commandBuffer.label = "Main Command Buffer"
         
-        // Generate Morton codes for all particles at the beginning of every frame
-        generateMortonCodes(commandBuffer: commandBuffer)
-        
-        // Sort the Morton codes
-        radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: UInt32(numSpheres))
+        if numSpheres > 0 {
+            // Generate Morton codes for all particles at the beginning of every frame
+            generateMortonCodes(commandBuffer: commandBuffer)
+            
+            // Sort the Morton codes
+            radixSorter.sort(commandBuffer: commandBuffer, input: mortonCodesBuffer, inputIndices: indicesBuffer, output: sortedMortonCodesBuffer, outputIndices: sortedIndicesBuffer, length: UInt32(numSpheres))
+            
+            // Count unique morton codes
+            countUniqueMortonCodes(commandBuffer: commandBuffer)
+            
+            // Aggregate leaf nodes
+            aggregateLeafNodes(commandBuffer: commandBuffer)
+        }
         
         if usePostProcessing {
             renderScene(commandBuffer: commandBuffer, view: view)
@@ -315,7 +356,7 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Morton Code Generation"
         
-        computeEncoder.setComputePipelineState(computePipelineState)
+        computeEncoder.setComputePipelineState(generateMortonCodesPipelineState)
         computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 0)
         computeEncoder.setBuffer(mortonCodesBuffer, offset: 0, index: 1)
         computeEncoder.setBuffer(indicesBuffer, offset: 0, index: 2)
@@ -323,6 +364,53 @@ class Renderer: NSObject, MTKViewDelegate {
         let threadGroupSize = MTLSizeMake(64, 1, 1)
         let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         
+        computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
+    }
+    
+    func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer) {
+        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        computeEncoder.label = "Count Unique Morton Codes"
+        
+        computeEncoder.setComputePipelineState(countUniqueMortonCodesPipelineState)
+        computeEncoder.setBuffer(sortedMortonCodesBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(uniqueMortonCodeCountBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(uniqueMortonCodeStartIndicesBuffer, offset: 0, index: 2)
+        
+        var numSpheresVal = UInt32(numSpheres)
+        computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 3)
+        
+        // Reset the count to 0 before dispatching
+        var initialCount: UInt32 = 0
+        uniqueMortonCodeCountBuffer.contents().copyMemory(from: &initialCount, byteCount: MemoryLayout<UInt32>.size)
+        
+        let threadGroupSize = MTLSizeMake(64, 1, 1)
+        let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+        
+        computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
+    }
+    
+    func aggregateLeafNodes(commandBuffer: MTLCommandBuffer) {
+        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        computeEncoder.label = "Aggregate Leaf Nodes"
+        
+        computeEncoder.setComputePipelineState(aggregateLeafNodesPipelineState)
+        computeEncoder.setBuffer(sortedMortonCodesBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(sortedIndicesBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 2)
+        computeEncoder.setBuffer(colorTypeBuffer, offset: 0, index: 3)
+        computeEncoder.setBuffer(octreeLeafNodesBuffer, offset: 0, index: 4)
+        computeEncoder.setBuffer(uniqueMortonCodeCountBuffer, offset: 0, index: 5)
+        computeEncoder.setBuffer(uniqueMortonCodeStartIndicesBuffer, offset: 0, index: 6)
+        
+        var numSpheresVal = UInt32(numSpheres)
+        computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 7)
+        
+        // Dispatch enough threads for the worst-case scenario (one leaf node per sphere).
+        // The kernel will check the actual unique count and exit early if needed.
+        let threadGroupSize = MTLSizeMake(64, 1, 1)
+        let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
         

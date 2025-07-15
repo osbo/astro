@@ -32,7 +32,6 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
     ColorType colorData = colors[instanceID];
 
     float3 worldPosition = (in.position * velocityData.radius) + positionData.position;
-
     out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(worldPosition, 1.0);
     out.color = colorData.color;
     
@@ -52,7 +51,6 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
     ColorType colorData = colors[instanceID];
 
     float3 particleCenterWorld = positionData.position;
-    
     out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(particleCenterWorld, 1.0);
     out.pointSize = velocityData.radius;
     

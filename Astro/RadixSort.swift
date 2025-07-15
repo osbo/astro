@@ -125,7 +125,10 @@ class ScanKernel {
         guard length > 0 else { return }
 
         let threadgroupSize = 512
-        let numThreadgroups = (Int(length) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2)
+        var numThreadgroups = (Int(length) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2)
+        if numThreadgroups == 0 {
+            numThreadgroups = 1
+        }
 
         var lengthVar = length
         var zeroff: UInt32 = 1
