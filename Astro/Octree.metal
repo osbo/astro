@@ -33,6 +33,19 @@ kernel void countUniqueMortonCodes(
     }
 }
 
+// Kernel: fills buffer with startIdx..(endIdx-1)
+kernel void fillIndices(
+    device uint* buffer [[buffer(0)]],
+    constant uint& startIdx [[buffer(1)]],
+    constant uint& endIdx [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    uint idx = startIdx + gid;
+    if (idx < endIdx) {
+        buffer[gid] = idx;
+    }
+}
+
 kernel void aggregateLeafNodes(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
     device const uint32_t* sortedIndices [[buffer(1)]],
