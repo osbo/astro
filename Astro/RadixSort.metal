@@ -116,7 +116,20 @@ kernel void split_prep(device const ulong* input [[ buffer(SplitBufferIndexInput
     if(tid >= count) {
         return;
     }
+    e[tid] = (input[tid] & (1UL<<bit)) == 0;
+}
 
+// New: dynamic count version
+kernel void split_prep_dynamic(device const ulong* input [[ buffer(SplitBufferIndexInput) ]],
+                              constant uint& bit [[ buffer(SplitBufferIndexBit) ]],
+                              device uint* e [[ buffer(SplitBufferIndexE) ]],
+                              device const uint* countBuffer [[ buffer(SplitBufferIndexCount) ]],
+                              uint tid [[ thread_position_in_grid ]])
+{
+    uint count = countBuffer[0];
+    if(tid >= count) {
+        return;
+    }
     e[tid] = (input[tid] & (1UL<<bit)) == 0;
 }
 
@@ -133,20 +146,47 @@ kernel void split_scatter(device const ulong* input [[ buffer(SplitBufferIndexIn
     if(tid >= count) {
         return;
     }
-
-    // Get the total number of falses (elements with bit == 0)
     uint totalFalses = f[count-1] + e[count-1];
     bool b = (input[tid] & (1UL<<bit)) != 0;
     uint d;
-    
     if (b) {
-        // This element has bit == 1, so it goes after all the falses
         d = totalFalses + (tid - f[tid]);
     } else {
-        // This element has bit == 0, so it goes at position f[tid]
         d = f[tid];
     }
-
     output[d] = input[tid];
     outputIndices[d] = inputIndices[tid];
+    // Clear the just-used unsorted buffers
+    ((device ulong*)input)[tid] = 0;
+    ((device uint*)inputIndices)[tid] = 0;
+}
+
+// New: dynamic count version
+kernel void split_scatter_dynamic(device const ulong* input [[ buffer(SplitBufferIndexInput) ]],
+                                 device const uint* inputIndices [[ buffer(SplitBufferIndexInputIndices) ]],
+                                 device ulong* output [[ buffer(SplitBufferIndexOutput) ]],
+                                 device uint* outputIndices [[ buffer(SplitBufferIndexOutputIndices) ]],
+                                 constant uint& bit [[ buffer(SplitBufferIndexBit) ]],
+                                 device const uint* e [[ buffer(SplitBufferIndexE) ]],
+                                 device const uint* f [[ buffer(SplitBufferIndexF) ]],
+                                 device const uint* countBuffer [[ buffer(SplitBufferIndexCount) ]],
+                                 uint tid [[ thread_position_in_grid ]])
+{
+    uint count = countBuffer[0];
+    if(tid >= count) {
+        return;
+    }
+    uint totalFalses = f[count-1] + e[count-1];
+    bool b = (input[tid] & (1UL<<bit)) != 0;
+    uint d;
+    if (b) {
+        d = totalFalses + (tid - f[tid]);
+    } else {
+        d = f[tid];
+    }
+    output[d] = input[tid];
+    outputIndices[d] = inputIndices[tid];
+    // Clear the just-used unsorted buffers
+    ((device ulong*)input)[tid] = 0;
+    ((device uint*)inputIndices)[tid] = 0;
 }

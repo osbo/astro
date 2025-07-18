@@ -86,11 +86,59 @@ class MetalKernelsRadixSort {
         
         // Copy final result back to original output buffers if needed
         if let blit = commandBuffer.makeBlitCommandEncoder() {
-            blit.copy(from: keysIn, sourceOffset: 0, to: output, destinationOffset: 0, size: Int(length) * MemoryLayout<UInt64>.size)
-            blit.copy(from: indicesIn, sourceOffset: 0, to: outputIndices, destinationOffset: 0, size: Int(length) * MemoryLayout<UInt32>.size)
+            if length > 0 {
+                blit.copy(from: keysIn, sourceOffset: 0, to: output, destinationOffset: 0, size: Int(length) * MemoryLayout<UInt64>.size)
+                blit.copy(from: indicesIn, sourceOffset: 0, to: outputIndices, destinationOffset: 0, size: Int(length) * MemoryLayout<UInt32>.size)
+            }
             blit.endEncoding()
         }
         commandBuffer.popDebugGroup()
+    }
+    
+    func sortWithBufferLength(commandBuffer: MTLCommandBuffer,
+              input: MTLBuffer,
+              inputIndices: MTLBuffer,
+              output: MTLBuffer,
+              outputIndices: MTLBuffer,
+              lengthBuffer: MTLBuffer) {
+        // Validate buffer sizes (assume max possible size)
+        let maxLength = maxLengthFromBuffers(input: input, inputIndices: inputIndices, output: output, outputIndices: outputIndices)
+        splitKernel.setMaxLength(maxLength)
+        var keysIn = input
+        var keysOut = output
+        var indicesIn = inputIndices
+        var indicesOut = outputIndices
+        for i in 0..<64 {
+            splitKernel.encodeSplitToWithBufferLength(commandBuffer,
+                                     input: keysIn,
+                                     inputIndices: indicesIn,
+                                     output: keysOut,
+                                     outputIndices: indicesOut,
+                                     bit: UInt32(i),
+                                     lengthBuffer: lengthBuffer)
+            if let compute = commandBuffer.makeComputeCommandEncoder() {
+                compute.memoryBarrier(resources: [keysOut, indicesOut])
+                compute.endEncoding()
+            }
+            swap(&keysIn, &keysOut)
+            swap(&indicesIn, &indicesOut)
+        }
+        if let blit = commandBuffer.makeBlitCommandEncoder() {
+            let length = lengthFromBuffer(lengthBuffer)
+            if length > 0 {
+                blit.copy(from: keysIn, sourceOffset: 0, to: output, destinationOffset: 0, size: Int(length) * MemoryLayout<UInt64>.size)
+                blit.copy(from: indicesIn, sourceOffset: 0, to: outputIndices, destinationOffset: 0, size: Int(length) * MemoryLayout<UInt32>.size)
+            }
+            blit.endEncoding()
+        }
+        commandBuffer.popDebugGroup()
+    }
+    private func maxLengthFromBuffers(input: MTLBuffer, inputIndices: MTLBuffer, output: MTLBuffer, outputIndices: MTLBuffer) -> UInt32 {
+        return UInt32(min(input.length / MemoryLayout<UInt64>.size, inputIndices.length / MemoryLayout<UInt32>.size, output.length / MemoryLayout<UInt64>.size, outputIndices.length / MemoryLayout<UInt32>.size))
+    }
+    private func lengthFromBuffer(_ buffer: MTLBuffer) -> UInt32 {
+        // This is only safe if the buffer is .shared and the value is up to date
+        return buffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
     }
 }
 
@@ -213,6 +261,8 @@ class SplitKernel {
     private let device: MTLDevice
     private let prepPipeline: MTLComputePipelineState
     private let scatterPipeline: MTLComputePipelineState
+    private let prepPipelineDynamic: MTLComputePipelineState
+    private let scatterPipelineDynamic: MTLComputePipelineState
     private let scanKernel: ScanKernel
     private var eBuffer: MTLBuffer
     private var fBuffer: MTLBuffer
@@ -228,6 +278,8 @@ class SplitKernel {
         do {
             self.prepPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "split_prep")!)
             self.scatterPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "split_scatter")!)
+            self.prepPipelineDynamic = try device.makeComputePipelineState(function: library.makeFunction(name: "split_prep_dynamic")!)
+            self.scatterPipelineDynamic = try device.makeComputePipelineState(function: library.makeFunction(name: "split_scatter_dynamic")!)
         } catch {
             fatalError("Failed to create split pipelines: \(error)")
         }
@@ -293,6 +345,47 @@ class SplitKernel {
             
             let threadgroupSize = MTLSize(width: 512, height: 1, depth: 1)
             let gridSize = MTLSize(width: Int(length), height: 1, depth: 1)
+            compute.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            compute.endEncoding()
+        }
+    }
+    
+    func encodeSplitToWithBufferLength(_ commandBuffer: MTLCommandBuffer,
+                       input: MTLBuffer,
+                       inputIndices: MTLBuffer,
+                       output: MTLBuffer,
+                       outputIndices: MTLBuffer,
+                       bit: UInt32,
+                       lengthBuffer: MTLBuffer) {
+        var bitVar = bit
+        // Step 1: Prepare split data (dynamic count)
+        if let compute = commandBuffer.makeComputeCommandEncoder() {
+            compute.setComputePipelineState(prepPipelineDynamic)
+            compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
+            compute.setBytes(&bitVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.bit.rawValue)
+            compute.setBuffer(eBuffer, offset: 0, index: SplitBufferIndex.e.rawValue)
+            compute.setBuffer(lengthBuffer, offset: 0, index: SplitBufferIndex.count.rawValue)
+            let maxLength = self.maxLength
+            let threadgroupSize = MTLSize(width: 512, height: 1, depth: 1)
+            let gridSize = MTLSize(width: Int(maxLength), height: 1, depth: 1)
+            compute.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            compute.endEncoding()
+        }
+        scanKernel.encodeScanTo(commandBuffer, input: eBuffer, output: fBuffer, length: self.maxLength)
+        // Step 3: Scatter based on split (dynamic count)
+        if let compute = commandBuffer.makeComputeCommandEncoder() {
+            compute.setComputePipelineState(scatterPipelineDynamic)
+            compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
+            compute.setBuffer(inputIndices, offset: 0, index: SplitBufferIndex.inputIndices.rawValue)
+            compute.setBuffer(output, offset: 0, index: SplitBufferIndex.output.rawValue)
+            compute.setBuffer(outputIndices, offset: 0, index: SplitBufferIndex.outputIndices.rawValue)
+            compute.setBytes(&bitVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.bit.rawValue)
+            compute.setBuffer(eBuffer, offset: 0, index: SplitBufferIndex.e.rawValue)
+            compute.setBuffer(fBuffer, offset: 0, index: SplitBufferIndex.f.rawValue)
+            compute.setBuffer(lengthBuffer, offset: 0, index: SplitBufferIndex.count.rawValue)
+            let maxLength = self.maxLength
+            let threadgroupSize = MTLSize(width: 512, height: 1, depth: 1)
+            let gridSize = MTLSize(width: Int(maxLength), height: 1, depth: 1)
             compute.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             compute.endEncoding()
         }
