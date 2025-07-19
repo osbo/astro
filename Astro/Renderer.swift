@@ -72,6 +72,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var unsortedInternalPipelineState: MTLComputePipelineState!
     var resetUIntBufferPipelineState: MTLComputePipelineState!
     var clearBufferPipelineState: MTLComputePipelineState!
+    var clearBuffer64PipelineState: MTLComputePipelineState!
     var clearOctreeNodeBufferPipelineState: MTLComputePipelineState!
     
     var radixSorter: MetalKernelsRadixSort!
@@ -217,6 +218,9 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let clearBufferFunction = library.makeFunction(name: "clearBuffer") else {
             fatalError("Could not find clearBuffer function in Octree.metal.")
         }
+        guard let clearBuffer64Function = library.makeFunction(name: "clearBuffer64") else {
+            fatalError("Could not find clearBuffer64 function in Octree.metal.")
+        }
         guard let clearOctreeNodeBufferFunction = library.makeFunction(name: "clearOctreeNodeBuffer") else {
             fatalError("Could not find clearOctreeNodeBuffer function in Octree.metal.")
         }
@@ -264,6 +268,7 @@ class Renderer: NSObject, MTKViewDelegate {
             unsortedInternalPipelineState = try device.makeComputePipelineState(function: unsortedInternalFunction)
             resetUIntBufferPipelineState = try device.makeComputePipelineState(function: resetUIntBufferFunction)
             clearBufferPipelineState = try device.makeComputePipelineState(function: clearBufferFunction)
+            clearBuffer64PipelineState = try device.makeComputePipelineState(function: clearBuffer64Function)
             clearOctreeNodeBufferPipelineState = try device.makeComputePipelineState(function: clearOctreeNodeBufferFunction)
         } catch {
             fatalError("Failed to create pipeline state: \(error)")
@@ -318,10 +323,17 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.endEncoding()
     }
     
-    func clearBuffer(commandBuffer: MTLCommandBuffer, buffer: MTLBuffer, count: Int) {
+    func clearBuffer<T>(commandBuffer: MTLCommandBuffer, buffer: MTLBuffer, count: Int, dataType: T.Type) {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Clear Buffer"
-        computeEncoder.setComputePipelineState(clearBufferPipelineState)
+        
+        // Choose the appropriate pipeline state based on data type
+        if T.self == UInt64.self {
+            computeEncoder.setComputePipelineState(clearBuffer64PipelineState)
+        } else {
+            computeEncoder.setComputePipelineState(clearBufferPipelineState)
+        }
+        
         computeEncoder.setBuffer(buffer, offset: 0, index: 0)
         
         let threadGroupSize = MTLSizeMake(64, 1, 1)
@@ -408,8 +420,8 @@ class Renderer: NSObject, MTKViewDelegate {
         commandBuffer.label = "Main Command Buffer"
         
         if sphereCount > 0 {
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount)
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
             clearOctreeNodeBuffer(commandBuffer: commandBuffer, buffer: octreeNodesBuffer, count: sphereCount * 2)
             
             generateMortonCodes(commandBuffer: commandBuffer)
@@ -466,7 +478,7 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer, aggregate: Bool) {
-        clearBuffer(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, count: sphereCount)
+        clearBuffer(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, count: sphereCount, dataType: UInt32.self)
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Count Unique Morton Codes"
         resetUIntBuffer(computeEncoder: computeEncoder, buffer: mortonCodeCountBuffer)
@@ -595,8 +607,8 @@ class Renderer: NSObject, MTKViewDelegate {
 
             // print("Layer \(layer), inputOffset: \(inputOffset), outputOffset: \(outputOffset), estimatedNodeCount: \(estimatedNodeCount), layerSize: \(outputOffset - inputOffset)")
             
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount)
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
             
             if layer >= sortThreshold {
                 // Use the stable radix sorter
@@ -613,8 +625,8 @@ class Renderer: NSObject, MTKViewDelegate {
                 unsortedInternalMortonCodes(commandBuffer: commandBuffer, layer: layer)
             }
 
-            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedMortonCodesBuffer, count: estimatedNodeCount)
-            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, count: estimatedNodeCount)
+            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
             
             aggregateInternalNodes(commandBuffer: commandBuffer, inputOffset: inputOffset, outputOffset: outputOffset, nodeCount: estimatedNodeCount, layer: layer + 1)
         }

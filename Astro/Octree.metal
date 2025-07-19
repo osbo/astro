@@ -230,6 +230,13 @@ kernel void clearBuffer(
     buffer[gid] = 0;
 }
 
+kernel void clearBuffer64(
+    device uint64_t* buffer [[buffer(0)]],
+    uint gid [[thread_position_in_grid]])
+{
+    buffer[gid] = 0;
+}
+
 kernel void clearOctreeNodeBuffer(
     device OctreeNode* buffer [[buffer(0)]],
     uint gid [[thread_position_in_grid]])
