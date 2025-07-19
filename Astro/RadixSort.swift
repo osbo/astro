@@ -1,25 +1,16 @@
-//
-//  MetalKernelsRadixSort.swift
-//  astro
-//
-//  Adapted from MetalKernels by Audulus LLC
-//
-
 import Metal
 import Foundation
 
 // Swift equivalents of the Metal enums
-enum ScanBufferIndex: Int {
+fileprivate enum ScanBufferIndex: Int {
     case input = 0
     case output = 1
     case aux = 2
     case length = 3
     case zeroff = 4
-    case indirectArguments = 5
-    case lengths = 6
 }
 
-enum SplitBufferIndex: Int {
+fileprivate enum SplitBufferIndex: Int {
     case input = 0
     case inputIndices = 1
     case output = 2
@@ -34,189 +25,210 @@ class MetalKernelsRadixSort {
     private let device: MTLDevice
     private let scanKernel: ScanKernel
     private let splitKernel: SplitKernel
-    
+
+    // Intermediate buffers for ping-ponging during the sort
+    private var tempKeys: MTLBuffer!
+    private var tempIndices: MTLBuffer!
+    private var copyKeysPipeline: MTLComputePipelineState!
+    private var copyIndicesPipeline: MTLComputePipelineState!
+
     init(device: MTLDevice) {
         self.device = device
         self.scanKernel = ScanKernel(device: device)
         self.splitKernel = SplitKernel(device: device)
-    }
-    
-    func sort(computeEncoder: MTLComputeCommandEncoder,
-              input: MTLBuffer,
-              inputIndices: MTLBuffer,
-              output: MTLBuffer,
-              outputIndices: MTLBuffer,
-              length: UInt32) {
-        // Validate buffer sizes
-        let requiredSize = Int(length) * MemoryLayout<UInt64>.size
-        assert(input.length >= requiredSize, "Input buffer too small")
-        assert(inputIndices.length >= Int(length) * MemoryLayout<UInt32>.size, "Input indices buffer too small")
-        assert(output.length >= requiredSize, "Output buffer too small")
-        assert(outputIndices.length >= Int(length) * MemoryLayout<UInt32>.size, "Output indices buffer too small")
         
-        // Ensure buffers are large enough
-        splitKernel.setMaxLength(length)
+        // Create copy pipelines
+        guard let library = device.makeDefaultLibrary() else {
+            fatalError("Failed to get default Metal library for copy pipelines")
+        }
         
-        var keysIn = input
-        var keysOut = output
-        var indicesIn = inputIndices
-        var indicesOut = outputIndices
-        
-        // Sort 64 bits, one bit at a time
-        for i in 0..<64 {
-            computeEncoder.pushDebugGroup("RadixSort Bit \(i)")
-            splitKernel.encodeSplitTo(computeEncoder,
-                                     input: keysIn,
-                                     inputIndices: indicesIn,
-                                     output: keysOut,
-                                     outputIndices: indicesOut,
-                                     bit: UInt32(i),
-                                     length: length)
-            
-            computeEncoder.memoryBarrier(resources: [keysOut, indicesOut])
-            
-            // Swap buffers for next iteration
-            swap(&keysIn, &keysOut)
-            swap(&indicesIn, &indicesOut)
-            computeEncoder.popDebugGroup()
+        do {
+            self.copyKeysPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "copyBuffer")!)
+            self.copyIndicesPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "copyIndices")!)
+        } catch {
+            fatalError("Failed to create copy pipelines: \(error)")
         }
     }
-    
-    func sortWithBufferLength(computeEncoder: MTLComputeCommandEncoder,
-              input: MTLBuffer,
-              inputIndices: MTLBuffer,
-              output: MTLBuffer,
-              outputIndices: MTLBuffer,
-              lengthBuffer: MTLBuffer) {
-        // Validate buffer sizes (assume max possible size)
-        let maxLength = maxLengthFromBuffers(input: input, inputIndices: inputIndices, output: output, outputIndices: outputIndices)
+
+    func setMaxLength(_ maxLength: UInt32) {
+        let requiredKeySize = Int(maxLength) * MemoryLayout<UInt64>.stride
+        let requiredIndexSize = Int(maxLength) * MemoryLayout<UInt32>.stride
+
+        if tempKeys == nil || tempKeys.length < requiredKeySize {
+            tempKeys = device.makeBuffer(length: requiredKeySize, options: .storageModePrivate)
+            tempKeys.label = "Radix Sort Temp Keys"
+        }
+        if tempIndices == nil || tempIndices.length < requiredIndexSize {
+            tempIndices = device.makeBuffer(length: requiredIndexSize, options: .storageModePrivate)
+            tempIndices.label = "Radix Sort Temp Indices"
+        }
+
         splitKernel.setMaxLength(maxLength)
-        var keysIn = input
-        var keysOut = output
-        var indicesIn = inputIndices
-        var indicesOut = outputIndices
-        for i in 0..<64 {
-            computeEncoder.pushDebugGroup("RadixSort Bit \(i)")
-            splitKernel.encodeSplitToWithBufferLength(computeEncoder,
-                                     input: keysIn,
-                                     inputIndices: indicesIn,
-                                     output: keysOut,
-                                     outputIndices: indicesOut,
-                                     bit: UInt32(i),
-                                     lengthBuffer: lengthBuffer)
+        scanKernel.setMaxLength(maxLength)
+    }
 
-            computeEncoder.memoryBarrier(resources: [keysOut, indicesOut])
+    func sort(commandBuffer: MTLCommandBuffer,
+              input: MTLBuffer,
+              inputIndices: MTLBuffer,
+              output: MTLBuffer,
+              outputIndices: MTLBuffer,
+              estimatedLength: UInt32,
+              actualCountBuffer: MTLBuffer) {
+
+        guard estimatedLength > 0 else { return }
+
+        setMaxLength(estimatedLength)
+
+        var keysIn = input
+        var keysOut = tempKeys!
+        var indicesIn = inputIndices
+        var indicesOut = tempIndices!
+
+        guard let compute = commandBuffer.makeComputeCommandEncoder() else { return }
+        compute.label = "Radix Sort Pass"
+
+        for i in 0..<64 {
+            splitKernel.encodeSplitTo(compute,
+                                      input: keysIn,
+                                      inputIndices: indicesIn,
+                                      output: keysOut,
+                                      outputIndices: indicesOut,
+                                      bit: UInt32(i),
+                                      estimatedLength: estimatedLength,
+                                      actualCountBuffer: actualCountBuffer)
+
+            compute.memoryBarrier(resources: [keysOut, indicesOut])
 
             swap(&keysIn, &keysOut)
             swap(&indicesIn, &indicesOut)
-            computeEncoder.popDebugGroup()
         }
-    }
-    private func maxLengthFromBuffers(input: MTLBuffer, inputIndices: MTLBuffer, output: MTLBuffer, outputIndices: MTLBuffer) -> UInt32 {
-        return UInt32(min(input.length / MemoryLayout<UInt64>.size, inputIndices.length / MemoryLayout<UInt32>.size, output.length / MemoryLayout<UInt64>.size, outputIndices.length / MemoryLayout<UInt32>.size))
-    }
-    private func lengthFromBuffer(_ buffer: MTLBuffer) -> UInt32 {
-        // This is only safe if the buffer is .shared and the value is up to date
-        return buffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
+
+        compute.endEncoding()
+
+        // Copy final results to output buffers using compute kernels
+        guard let copyEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        copyEncoder.label = "Radix Sort Final Copy"
+        
+        // Copy keys
+        copyEncoder.setComputePipelineState(copyKeysPipeline)
+        copyEncoder.setBuffer(keysIn, offset: 0, index: 0)
+        copyEncoder.setBuffer(output, offset: 0, index: 1)
+        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+        let threadGroupSize = MTLSize(width: 512, height: 1, depth: 1)
+        let threadGroups = MTLSize(width: (Int(estimatedLength) + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
+        copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+        
+        // Copy indices
+        copyEncoder.setComputePipelineState(copyIndicesPipeline)
+        copyEncoder.setBuffer(indicesIn, offset: 0, index: 0)
+        copyEncoder.setBuffer(outputIndices, offset: 0, index: 1)
+        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+        copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+        
+        copyEncoder.endEncoding()
     }
 }
 
 // MARK: - Scan Kernel
 
-class ScanKernel {
+fileprivate class ScanKernel {
     private let device: MTLDevice
     private let prefixSumPipeline: MTLComputePipelineState
     private let prefixFixupPipeline: MTLComputePipelineState
-    private let scanThreadgroupsPipeline: MTLComputePipelineState
-    private var auxBuffer: MTLBuffer
-    private var aux2Buffer: MTLBuffer
-    private var auxBufferSize: Int = 0
-    private var aux2BufferSize: Int = 0
-    
+
+    private var auxBuffer: MTLBuffer!
+    private var aux2Buffer: MTLBuffer!
+    private var auxSmallBuffer: MTLBuffer!
+
     init(device: MTLDevice) {
         self.device = device
         guard let library = device.makeDefaultLibrary() else {
-            fatalError("Failed to get default Metal library")
+            fatalError("Failed to get default Metal library for ScanKernel")
         }
+
         do {
             self.prefixSumPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "prefixSum")!)
             self.prefixFixupPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "prefixFixup")!)
-            self.scanThreadgroupsPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "scan_threadgroups")!)
         } catch {
             fatalError("Failed to create scan pipelines: \(error)")
         }
-        // Pre-allocate with a reasonable default size
-        self.auxBuffer = device.makeBuffer(length: 4096 * MemoryLayout<UInt32>.size, options: .storageModePrivate)!
-        self.aux2Buffer = device.makeBuffer(length: 4096 * MemoryLayout<UInt32>.size, options: .storageModePrivate)!
-        self.auxBufferSize = 4096 * MemoryLayout<UInt32>.size
-        self.aux2BufferSize = 4096 * MemoryLayout<UInt32>.size
     }
-    
+
     func setMaxLength(_ maxLength: UInt32) {
         let threadgroupSize = 512
-        let numThreadgroups = max(1, (Int(maxLength) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2))
-        let requiredAuxSize = numThreadgroups * MemoryLayout<UInt32>.size
-        if auxBuffer.length < requiredAuxSize {
-            auxBuffer = device.makeBuffer(length: requiredAuxSize, options: .storageModePrivate)!
-            auxBufferSize = requiredAuxSize
+        // Ensure maxLength is at least 1 to avoid creating a zero-sized buffer
+        let adjustedLength = max(1, maxLength)
+        let numThreadgroups = (Int(adjustedLength) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2)
+        let requiredAuxSize = max(1, numThreadgroups) * MemoryLayout<UInt32>.size
+
+        if auxBuffer == nil || auxBuffer.length < requiredAuxSize {
+            auxBuffer = device.makeBuffer(length: requiredAuxSize, options: .storageModePrivate)
+            auxBuffer.label = "Scan Aux Buffer"
         }
-        if aux2Buffer.length < requiredAuxSize {
-            aux2Buffer = device.makeBuffer(length: requiredAuxSize, options: .storageModePrivate)!
-            aux2BufferSize = requiredAuxSize
+
+        // aux2Buffer needs to be large enough to hold the scanned results of auxBuffer
+        let requiredAux2Size = requiredAuxSize
+        if aux2Buffer == nil || aux2Buffer.length < requiredAux2Size {
+            aux2Buffer = device.makeBuffer(length: requiredAux2Size, options: .storageModePrivate)
+            aux2Buffer.label = "Scan Aux2 Buffer"
+        }
+
+        // auxSmallBuffer for single-threadgroup scans
+        let requiredAuxSmallSize = MemoryLayout<UInt32>.size
+        if auxSmallBuffer == nil || auxSmallBuffer.length < requiredAuxSmallSize {
+            auxSmallBuffer = device.makeBuffer(length: requiredAuxSmallSize, options: .storageModePrivate)
+            auxSmallBuffer.label = "Scan Aux Small Buffer"
         }
     }
-    
+
     func encodeScanTo(_ compute: MTLComputeCommandEncoder,
                       input: MTLBuffer,
                       output: MTLBuffer,
                       length: UInt32) {
+
         guard length > 0 else { return }
+
         let threadgroupSize = 512
-        var numThreadgroups = (Int(length) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2)
-        if numThreadgroups == 0 {
-            numThreadgroups = 1
-        }
+        let numThreadgroups = (Int(length) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2)
+
         var lengthVar = length
         var zeroff: UInt32 = 1
+
         if numThreadgroups <= 1 {
             compute.setComputePipelineState(prefixSumPipeline)
             compute.setBuffer(input, offset: 0, index: ScanBufferIndex.input.rawValue)
             compute.setBuffer(output, offset: 0, index: ScanBufferIndex.output.rawValue)
-            compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
+            compute.setBuffer(self.auxBuffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
             compute.setBytes(&lengthVar, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.length.rawValue)
             compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
             compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
         } else {
-            // 1. First pass: block-wise scan
+            // Pass 1: Block-wise scan
             compute.setComputePipelineState(prefixSumPipeline)
             compute.setBuffer(input, offset: 0, index: ScanBufferIndex.input.rawValue)
             compute.setBuffer(output, offset: 0, index: ScanBufferIndex.output.rawValue)
-            compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
+            compute.setBuffer(self.auxBuffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
             compute.setBytes(&lengthVar, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.length.rawValue)
             compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
             compute.dispatchThreadgroups(MTLSize(width: numThreadgroups, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
             
-            compute.memoryBarrier(resources: [auxBuffer])
-
-            // 2. Second pass: scan the auxiliary buffer
+            // Pass 2: Scan the auxiliary buffer
             var auxLength = UInt32(numThreadgroups)
             compute.setComputePipelineState(prefixSumPipeline)
-            compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.input.rawValue)
-            compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.output.rawValue)
-            compute.setBuffer(aux2Buffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
+            compute.setBuffer(self.auxBuffer, offset: 0, index: ScanBufferIndex.input.rawValue)
+            compute.setBuffer(self.aux2Buffer, offset: 0, index: ScanBufferIndex.output.rawValue)
+            compute.setBuffer(self.auxSmallBuffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
             compute.setBytes(&auxLength, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.length.rawValue)
             compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
             compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
 
-            compute.memoryBarrier(resources: [auxBuffer, aux2Buffer])
-
-            // 3. Third pass: fix up the main buffer
+            // Pass 3: Fix up the main buffer
             compute.setComputePipelineState(prefixFixupPipeline)
             compute.setBuffer(output, offset: 0, index: ScanBufferIndex.input.rawValue)
-            compute.setBuffer(auxBuffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
+            compute.setBuffer(self.aux2Buffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
             compute.setBytes(&lengthVar, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.length.rawValue)
             compute.dispatchThreadgroups(MTLSize(width: numThreadgroups, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
@@ -226,82 +238,68 @@ class ScanKernel {
 
 // MARK: - Split Kernel
 
-class SplitKernel {
+fileprivate class SplitKernel {
     private let device: MTLDevice
     private let prepPipeline: MTLComputePipelineState
     private let scatterPipeline: MTLComputePipelineState
-    private let prepPipelineDynamic: MTLComputePipelineState
-    private let scatterPipelineDynamic: MTLComputePipelineState
     private let scanKernel: ScanKernel
-    private var eBuffer: MTLBuffer
-    private var fBuffer: MTLBuffer
-    
+    private var eBuffer: MTLBuffer!
+    private var fBuffer: MTLBuffer!
+
     init(device: MTLDevice) {
         self.device = device
         self.scanKernel = ScanKernel(device: device)
-        
         guard let library = device.makeDefaultLibrary() else {
-            fatalError("Failed to get default Metal library")
+            fatalError("Failed to get default Metal library for SplitKernel")
         }
-        
+
         do {
             self.prepPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "split_prep")!)
             self.scatterPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "split_scatter")!)
-            self.prepPipelineDynamic = try device.makeComputePipelineState(function: library.makeFunction(name: "split_prep_dynamic")!)
-            self.scatterPipelineDynamic = try device.makeComputePipelineState(function: library.makeFunction(name: "split_scatter_dynamic")!)
         } catch {
             fatalError("Failed to create split pipelines: \(error)")
         }
-        
-        // Initialize with default size
-        self.eBuffer = device.makeBuffer(length: 1024 * MemoryLayout<UInt32>.size, options: .storageModePrivate)!
-        self.fBuffer = device.makeBuffer(length: 1024 * MemoryLayout<UInt32>.size, options: .storageModePrivate)!
     }
-    
-    var maxLength: UInt32 {
-        return UInt32(eBuffer.length / MemoryLayout<UInt32>.size)
-    }
-    
+
     func setMaxLength(_ maxLength: UInt32) {
-        let requiredSize = Int(maxLength) * MemoryLayout<UInt32>.size
-        if eBuffer.length != requiredSize {
-            eBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)!
-            fBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)!
+        let requiredSize = Int(max(1, maxLength)) * MemoryLayout<UInt32>.stride
+        if eBuffer == nil || eBuffer.length < requiredSize {
+            eBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
+            fBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
+            eBuffer.label = "Radix eBuffer"
+            fBuffer.label = "Radix fBuffer"
         }
+        
+        // Ensure the scan kernel is also initialized with the same max length
+        scanKernel.setMaxLength(maxLength)
     }
-    
+
     func encodeSplitTo(_ compute: MTLComputeCommandEncoder,
                        input: MTLBuffer,
                        inputIndices: MTLBuffer,
                        output: MTLBuffer,
                        outputIndices: MTLBuffer,
                        bit: UInt32,
-                       length: UInt32) {
-        
-        assert(length <= maxLength, "Length exceeds maximum supported length")
-        
+                       estimatedLength: UInt32,
+                       actualCountBuffer: MTLBuffer) {
+
         var bitVar = bit
-        var lengthVar = length
-        
+
         // Step 1: Prepare split data
         compute.setComputePipelineState(prepPipeline)
         compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
         compute.setBytes(&bitVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.bit.rawValue)
         compute.setBuffer(eBuffer, offset: 0, index: SplitBufferIndex.e.rawValue)
-        compute.setBytes(&lengthVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.count.rawValue)
-        
+        compute.setBuffer(actualCountBuffer, offset: 0, index: SplitBufferIndex.count.rawValue)
+
         let threadgroupSize = MTLSize(width: 512, height: 1, depth: 1)
-        let gridSize = MTLSize(width: Int(length), height: 1, depth: 1)
-        compute.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+        let threadgroups = MTLSize(width: (Int(estimatedLength) + threadgroupSize.width - 1) / threadgroupSize.width, height: 1, depth: 1)
+        compute.dispatchThreadgroups(threadgroups, threadsPerThreadgroup: threadgroupSize)
 
-        compute.memoryBarrier(resources: [eBuffer])
-        
-        // Step 2: Scan the split data
-        scanKernel.encodeScanTo(compute, input: eBuffer, output: fBuffer, length: length)
+        // Step 2: Scan the e-buffer to get the f-buffer
+        scanKernel.encodeScanTo(compute, input: eBuffer, output: fBuffer, length: estimatedLength)
 
-        compute.memoryBarrier(resources: [fBuffer])
-        
-        // Step 3: Scatter based on split
+        // Step 3: Scatter based on the split information
         compute.setComputePipelineState(scatterPipeline)
         compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
         compute.setBuffer(inputIndices, offset: 0, index: SplitBufferIndex.inputIndices.rawValue)
@@ -310,46 +308,8 @@ class SplitKernel {
         compute.setBytes(&bitVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.bit.rawValue)
         compute.setBuffer(eBuffer, offset: 0, index: SplitBufferIndex.e.rawValue)
         compute.setBuffer(fBuffer, offset: 0, index: SplitBufferIndex.f.rawValue)
-        compute.setBytes(&lengthVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.count.rawValue)
-        
-        compute.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-    }
-    
-    func encodeSplitToWithBufferLength(_ compute: MTLComputeCommandEncoder,
-                       input: MTLBuffer,
-                       inputIndices: MTLBuffer,
-                       output: MTLBuffer,
-                       outputIndices: MTLBuffer,
-                       bit: UInt32,
-                       lengthBuffer: MTLBuffer) {
-        var bitVar = bit
-        // Step 1: Prepare split data (dynamic count)
-        compute.setComputePipelineState(prepPipelineDynamic)
-        compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
-        compute.setBytes(&bitVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.bit.rawValue)
-        compute.setBuffer(eBuffer, offset: 0, index: SplitBufferIndex.e.rawValue)
-        compute.setBuffer(lengthBuffer, offset: 0, index: SplitBufferIndex.count.rawValue)
-        let maxLength = self.maxLength
-        let threadgroupSize = MTLSize(width: 512, height: 1, depth: 1)
-        let gridSize = MTLSize(width: Int(maxLength), height: 1, depth: 1)
-        compute.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+        compute.setBuffer(actualCountBuffer, offset: 0, index: SplitBufferIndex.count.rawValue)
 
-        compute.memoryBarrier(resources: [eBuffer])
-
-        scanKernel.encodeScanTo(compute, input: eBuffer, output: fBuffer, length: self.maxLength)
-
-        compute.memoryBarrier(resources: [fBuffer])
-
-        // Step 3: Scatter based on split (dynamic count)
-        compute.setComputePipelineState(scatterPipelineDynamic)
-        compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
-        compute.setBuffer(inputIndices, offset: 0, index: SplitBufferIndex.inputIndices.rawValue)
-        compute.setBuffer(output, offset: 0, index: SplitBufferIndex.output.rawValue)
-        compute.setBuffer(outputIndices, offset: 0, index: SplitBufferIndex.outputIndices.rawValue)
-        compute.setBytes(&bitVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.bit.rawValue)
-        compute.setBuffer(eBuffer, offset: 0, index: SplitBufferIndex.e.rawValue)
-        compute.setBuffer(fBuffer, offset: 0, index: SplitBufferIndex.f.rawValue)
-        compute.setBuffer(lengthBuffer, offset: 0, index: SplitBufferIndex.count.rawValue)
-        compute.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+        compute.dispatchThreadgroups(threadgroups, threadsPerThreadgroup: threadgroupSize)
     }
 }
