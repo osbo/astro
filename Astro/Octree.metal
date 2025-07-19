@@ -12,17 +12,7 @@ kernel void countUniqueMortonCodes(
     device uint* layerCountBuffer [[buffer(5)]],
     uint gid [[thread_position_in_grid]])
 {
-    if (gid == 0) {
-        // Initialize count to 0 and set the first start index
-        atomic_store_explicit(uniqueMortonCodeCount, 0u, memory_order_relaxed);
-        if (numSpheres > 0) {
-            atomic_store_explicit(uniqueMortonCodeCount, 1u, memory_order_relaxed);
-            uniqueMortonCodeStartIndices[0] = 0;
-        }
-        if (layerCountBuffer != nullptr) {
-            layerCountBuffer[0] += 1;
-        }
-    } else if (gid < numSpheres) {
+    if (gid < numSpheres) {
         bool isUnique;
         if (aggregate == 1) {
             isUnique = ((sortedMortonCodes[gid] >> 3) != (sortedMortonCodes[gid - 1] >> 3));

@@ -563,8 +563,6 @@ class Renderer: NSObject, MTKViewDelegate {
             return 
         }
 
-        print("Layer \(layer), inputOffset: \(inputOffset), outputOffset: \(outputOffset), nodeCount: \(nodeCount)")
-
         computeEncoder.setComputePipelineState(aggregateNodesPipelineState)
         computeEncoder.setBuffer(octreeNodesBuffer, offset: 0, index: 0)
         computeEncoder.setBuffer(sortedMortonCodesBuffer, offset: 0, index: 1)
@@ -596,6 +594,9 @@ class Renderer: NSObject, MTKViewDelegate {
             let outputOffset = octreeLayerOffset(layer: layer + 1, leafCount: leafCount)
 
             // print("Layer \(layer), inputOffset: \(inputOffset), outputOffset: \(outputOffset), estimatedNodeCount: \(estimatedNodeCount), layerSize: \(outputOffset - inputOffset)")
+            
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount)
             
             if layer >= sortThreshold {
                 // Use the stable radix sorter
