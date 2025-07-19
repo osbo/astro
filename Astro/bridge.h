@@ -32,17 +32,34 @@ typedef struct {
 } VelocityRadius;
 
 typedef struct {
-    vector_float4 color;
+#ifdef __METAL_VERSION__
+    float4 color;
     uint type; // 0: star, 1: planet, 2: dust
+#else
+    simd_float4 color;
+    uint32_t type; // 0: star, 1: planet, 2: dust
+#endif
 } ColorType;
 
 typedef struct {
+#ifdef __METAL_VERSION__
     uint64_t mortonCode;
-    vector_float3 centerOfMass;
+    float3 centerOfMass;
     float totalMass;
-    vector_float4 emittedColor;
-    vector_float3 emittedColorCenter;
-} OctreeLeafNode;
+    float4 emittedColor;
+    float3 emittedColorCenter;
+    uint32_t children[8];
+    uint32_t layer;
+#else
+    uint64_t mortonCode;
+    simd_float3 centerOfMass;
+    float totalMass;
+    simd_float4 emittedColor;
+    simd_float3 emittedColorCenter;
+    uint32_t children[8];
+    uint32_t layer;
+#endif
+} OctreeNode;
 
 typedef struct {
 #ifdef __METAL_VERSION__

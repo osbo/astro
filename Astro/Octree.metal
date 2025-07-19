@@ -59,108 +59,147 @@ kernel void aggregateLeafNodes(
     device const PositionMass* positionMassBuffer [[buffer(3)]],
     device const ColorType* colorTypeBuffer [[buffer(4)]],
     device const uint* mortonCodeCountBuffer [[buffer(5)]],
-    device OctreeLeafNode* octreeNodesBuffer [[buffer(6)]],
+    device OctreeNode* octreeNodesBuffer [[buffer(6)]],
     device uint64_t* unsortedMortonCodesBuffer [[buffer(7)]],
     device uint* unsortedIndicesBuffer [[buffer(8)]],
     uint gid [[thread_position_in_grid]])
 {
-    uint numNodes = mortonCodeCountBuffer[0];
-    if (gid >= numNodes) return;
-
-    uint start = uniqueIndicesBuffer[gid];
-    uint end = (gid + 1 < numNodes) ? uniqueIndicesBuffer[gid + 1] : numNodes == 0 ? 0 : (uint) mortonCodeCountBuffer[0];
-    // Defensive: if numNodes==0, end=0, else end=numSpheres
-    
-    float totalMass = 0.0;
-    float3 centerOfMassSum = float3(0.0);
-    float4 emittedColorSum = float4(0.0);
-    float3 emittedColorCenterSum = float3(0.0);
-    uint starCount = 0;
-
-    uint64_t mortonCode = sortedMortonCodesBuffer[start];
-
-    for (uint i = start; i < end; ++i) {
-        uint sphereIdx = sortedIndicesBuffer[i];
-        PositionMass pm = positionMassBuffer[sphereIdx];
-        ColorType ct = colorTypeBuffer[sphereIdx];
-        totalMass += pm.mass;
-        centerOfMassSum += pm.position * pm.mass;
-        if (ct.type == 0) {
-            emittedColorSum += ct.color;
-            emittedColorCenterSum += pm.position;
-            starCount += 1;
-        }
-        sortedMortonCodesBuffer[i] = 0;
-        sortedIndicesBuffer[i] = 0;
+    uint numUnique = mortonCodeCountBuffer[0];
+    if (gid >= numUnique) {
+        return;
     }
 
-    OctreeLeafNode node;
-    node.mortonCode = mortonCode;
-    node.totalMass = totalMass;
-    node.centerOfMass = (totalMass > 0.0) ? (centerOfMassSum / totalMass) : float3(0.0);
-    node.emittedColor = (starCount > 0) ? emittedColorSum : float4(0.0);
-    node.emittedColorCenter = (starCount > 0) ? (emittedColorCenterSum / float(starCount)) : float3(0.0);
+    uint childStartIdx = uniqueIndicesBuffer[gid];
+    uint childEndIdx = (gid + 1 < numUnique) ? uniqueIndicesBuffer[gid + 1] : numUnique;
 
-    octreeNodesBuffer[gid] = node;
-    unsortedMortonCodesBuffer[gid] = mortonCode;
+    float3 totalCenterOfMass = float3(0.0, 0.0, 0.0);
+    float totalMass = 0.0;
+    float4 totalEmittedColor = float4(0.0, 0.0, 0.0, 0.0);
+    float3 totalEmittedColorCenter = float3(0.0, 0.0, 0.0);
+    uint32_t children[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    uint numSuns = 0;
+    
+    for (uint i = childStartIdx; i < childEndIdx; i++) {
+        uint sphereIndex = sortedIndicesBuffer[i];
+        PositionMass sphereData = positionMassBuffer[sphereIndex];
+        ColorType colorData = colorTypeBuffer[sphereIndex];
+        
+        totalMass += sphereData.mass;
+        totalCenterOfMass += sphereData.position * sphereData.mass;
+        
+        if (colorData.type == 0) {
+            totalEmittedColor += colorData.color;
+            totalEmittedColorCenter += sphereData.position;
+            numSuns += 1;
+        }
+    }
+
+    float3 finalCenterOfMass = (totalMass > 0.0) ? (totalCenterOfMass / totalMass) : float3(0.0, 0.0, 0.0);
+    float4 finalEmittedColor = totalEmittedColor;
+    float3 finalEmittedColorCenter = totalEmittedColorCenter;
+    
+    if (numSuns > 0) {
+        finalEmittedColorCenter /= numSuns;
+    }
+
+    uint64_t firstMortonCode = sortedMortonCodesBuffer[childStartIdx];
+    OctreeNode leafNode;
+    leafNode.mortonCode = firstMortonCode;
+    leafNode.centerOfMass = finalCenterOfMass;
+    leafNode.totalMass = totalMass;
+    leafNode.emittedColor = finalEmittedColor;
+    leafNode.emittedColorCenter = finalEmittedColorCenter;
+    leafNode.layer = 0;
+    for (int i = 0; i < 8; i++) {
+        leafNode.children[i] = children[i];
+    }
+
+    octreeNodesBuffer[gid] = leafNode;
+    unsortedMortonCodesBuffer[gid] = firstMortonCode;
     unsortedIndicesBuffer[gid] = gid;
+
+    return;
 }
 
 // Updated aggregateNodes kernel: single node buffer, explicit input/output offsets
 kernel void aggregateNodes(
-    device OctreeLeafNode* octreeNodesBuffer [[buffer(0)]],
+    device OctreeNode* octreeNodesBuffer [[buffer(0)]],
     device const uint64_t* sortedMortonCodesBuffer [[buffer(1)]],
     device const uint* sortedIndicesBuffer [[buffer(2)]],
     device const uint* uniqueIndicesBuffer [[buffer(3)]],
     device const uint* mortonCodeCountBuffer [[buffer(4)]],
     constant uint& inputOffset [[buffer(5)]],
     constant uint& outputOffset [[buffer(6)]],
-    device uint64_t* unsortedMortonCodesBuffer [[buffer(7)]],
-    device uint* unsortedIndicesBuffer [[buffer(8)]],
+    constant uint& layer [[buffer(7)]],
+    device uint64_t* unsortedMortonCodesBuffer [[buffer(8)]],
+    device uint* unsortedIndicesBuffer [[buffer(9)]],
     uint gid [[thread_position_in_grid]])
 {
-    uint numNodes = mortonCodeCountBuffer[0];
-    if (gid >= numNodes) return;
+    uint numUnique = mortonCodeCountBuffer[0];
+    if (gid >= numUnique) {
+        return;
+    }
 
-    // Each internal node aggregates up to 8 children
-    uint childStart = inputOffset + gid * 8;
-    uint childEnd = min(childStart + 8, inputOffset + numNodes);
+    uint childStartIdx = uniqueIndicesBuffer[gid];
+    uint childEndIdx = (gid + 1 < numUnique) ? uniqueIndicesBuffer[gid + 1] : numUnique;
 
+    float3 totalCenterOfMass = float3(0.0, 0.0, 0.0);
     float totalMass = 0.0;
-    float3 centerOfMassSum = float3(0.0);
-    float4 emittedColorSum = float4(0.0);
-    float3 emittedColorCenterSum = float3(0.0);
-    uint starCount = 0;
-    uint64_t mortonCode = 0xFFFFFFFFFFFFFFFF;
+    float4 totalEmittedColor = float4(0.0, 0.0, 0.0, 0.0);
+    float3 totalEmittedColorCenter = float3(0.0, 0.0, 0.0);
+    uint32_t children[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    int childCount = 0;
+    uint numSuns = 0;
+    
+    for (uint i = childStartIdx; i < childEndIdx; i++) {
+        uint nodeIndex = sortedIndicesBuffer[i] + inputOffset;
+        OctreeNode childNode = octreeNodesBuffer[nodeIndex];
 
-    for (uint i = childStart; i < childEnd; ++i) {
-        OctreeLeafNode child = octreeNodesBuffer[i];
-        totalMass += child.totalMass;
-        centerOfMassSum += child.centerOfMass * child.totalMass;
-        if (any(child.emittedColor != float4(0.0))) {
-            emittedColorSum += child.emittedColor;
-            emittedColorCenterSum += child.emittedColorCenter;
-            starCount += 1;
+        totalMass += childNode.totalMass;
+        totalCenterOfMass += childNode.centerOfMass * childNode.totalMass;
+        
+        if (childNode.emittedColor.w > 0.0) {
+            totalEmittedColor += childNode.emittedColor;
+            totalEmittedColorCenter += childNode.emittedColorCenter;
+            numSuns += 1;
         }
-        if (child.mortonCode < mortonCode) {
-            mortonCode = child.mortonCode;
+
+        if (childCount < 8) {
+            children[childCount] = nodeIndex;
+            childCount += 1;
         }
     }
 
-    OctreeLeafNode node;
-    node.mortonCode = mortonCode;
-    node.totalMass = totalMass;
-    node.centerOfMass = (totalMass > 0.0) ? (centerOfMassSum / totalMass) : float3(0.0);
-    node.emittedColor = (starCount > 0) ? emittedColorSum : float4(0.0);
-    node.emittedColorCenter = (starCount > 0) ? (emittedColorCenterSum / float(starCount)) : float3(0.0);
+    float3 finalCenterOfMass = (totalMass > 0.0) ? (totalCenterOfMass / totalMass) : float3(0.0, 0.0, 0.0);
+    float4 finalEmittedColor = totalEmittedColor;
+    float3 finalEmittedColorCenter = totalEmittedColorCenter;
+    
+    if (numSuns > 0) {
+        finalEmittedColorCenter /= numSuns;
+    }
 
-    octreeNodesBuffer[outputOffset + gid] = node;
-    unsortedMortonCodesBuffer[gid] = node.mortonCode;
+    uint64_t firstMortonCode = sortedMortonCodesBuffer[childStartIdx];
+    uint64_t shiftedMortonCode = firstMortonCode >> 3;
+    OctreeNode node;
+    node.mortonCode = shiftedMortonCode;
+    node.centerOfMass = finalCenterOfMass;
+    node.totalMass = totalMass;
+    node.emittedColor = finalEmittedColor;
+    node.emittedColorCenter = finalEmittedColorCenter;
+    node.layer = layer;
+    for (int i = 0; i < 8; i++) {
+        node.children[i] = children[i];
+    }
+
+    octreeNodesBuffer[gid + outputOffset] = node;
+    unsortedMortonCodesBuffer[gid] = shiftedMortonCode;
     unsortedIndicesBuffer[gid] = gid;
+
+    return;
 }
 
 kernel void extractMortonCodes(
-    device const OctreeLeafNode* octreeNodes [[buffer(0)]],
+    device const OctreeNode* octreeNodes [[buffer(0)]],
     device ulong* mortonCodes [[buffer(1)]],
     uint gid [[thread_position_in_grid]])
 {
@@ -192,4 +231,29 @@ kernel void unsortedInternal(
 
 kernel void resetUIntBuffer(device uint* buffer [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
     if (tid == 0) buffer[0] = 0;
+}
+
+kernel void clearBuffer(
+    device uint* buffer [[buffer(0)]],
+    uint gid [[thread_position_in_grid]])
+{
+    buffer[gid] = 0;
+}
+
+kernel void clearOctreeNodeBuffer(
+    device OctreeNode* buffer [[buffer(0)]],
+    uint gid [[thread_position_in_grid]])
+{
+    OctreeNode emptyNode;
+    emptyNode.mortonCode = 0;
+    emptyNode.centerOfMass = float3(0.0, 0.0, 0.0);
+    emptyNode.totalMass = 0.0;
+    emptyNode.emittedColor = float4(0.0, 0.0, 0.0, 0.0);
+    emptyNode.emittedColorCenter = float3(0.0, 0.0, 0.0);
+    for (int i = 0; i < 8; i++) {
+        emptyNode.children[i] = 0;
+    }
+    emptyNode.layer = 0;
+    
+    buffer[gid] = emptyNode;
 }
