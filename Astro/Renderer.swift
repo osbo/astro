@@ -22,7 +22,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var currentLayer: Int32 = 0
     var numStars: Int32 = 3
     var numPlanets: Int32 = 100
-    var numDust: Int32 = 1000000
+    var numDust: Int32 = 500000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -534,23 +534,21 @@ class Renderer: NSObject, MTKViewDelegate {
             let outputOffset = octreeLayerOffset(layer: Int(currentLayer), leafCount: leafCount)
             
             if currentLayer >= sortThreshold {
-                if currentLayer >= sortThreshold {
-                    radixSorter.sortWithBufferLength(computeEncoder: computeEncoder,
-                                                     input: unsortedMortonCodesBuffer,
-                                                     inputIndices: unsortedIndicesBuffer,
-                                                     output: sortedMortonCodesBuffer,
-                                                     outputIndices: sortedIndicesBuffer,
-                                                     lengthBuffer: mortonCodeCountBuffer)
-                    
-                    countUniqueMortonCodes(computeEncoder: computeEncoder, aggregate: true)
-                } else {
-                    unsortedInternalMortonCodes(computeEncoder: computeEncoder, layer: Int(currentLayer))
-                }
+                radixSorter.sortWithBufferLength(computeEncoder: computeEncoder,
+                                                 input: unsortedMortonCodesBuffer,
+                                                 inputIndices: unsortedIndicesBuffer,
+                                                 output: sortedMortonCodesBuffer,
+                                                 outputIndices: sortedIndicesBuffer,
+                                                 lengthBuffer: mortonCodeCountBuffer)
                 
-                aggregateInternalNodes(computeEncoder: computeEncoder, inputOffset: inputOffset, outputOffset: outputOffset, nodeCount: nodeCount, layer: Int(currentLayer))
-                
-                prevCount = nodeCount
+                countUniqueMortonCodes(computeEncoder: computeEncoder, aggregate: true)
+            } else {
+                unsortedInternalMortonCodes(computeEncoder: computeEncoder, layer: Int(currentLayer))
             }
+            
+            aggregateInternalNodes(computeEncoder: computeEncoder, inputOffset: inputOffset, outputOffset: outputOffset, nodeCount: nodeCount, layer: Int(currentLayer))
+            
+            prevCount = nodeCount
         }
     }
     
