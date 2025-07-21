@@ -151,9 +151,9 @@ kernel void aggregateNodes(
     for (uint i = childStartIdx; i < childEndIdx; i++) {
         uint nodeIndex = sortedIndicesBuffer[i] + inputOffset;
         // Robust bounds check for nodeIndex
-        if (nodeIndex < inputOffset || nodeIndex >= inputOffset + inputLayerSize) {
-            return;
-        }
+        // if (nodeIndex < inputOffset || nodeIndex >= inputOffset + inputLayerSize) {
+        //     return;
+        // }
         OctreeNode childNode = octreeNodesBuffer[nodeIndex];
 
         totalMass += childNode.totalMass;
@@ -194,9 +194,9 @@ kernel void aggregateNodes(
 
     // Robust bounds check for output index
     uint outputIndex = gid + outputOffset;
-    if (outputIndex < outputOffset || outputIndex >= outputOffset + outputLayerSize) {
-        return;
-    }
+    // if (outputIndex < outputOffset || outputIndex >= outputOffset + outputLayerSize) {
+    //     return;
+    // }
 
     octreeNodesBuffer[outputIndex] = node;
     unsortedMortonCodesBuffer[gid] = shiftedMortonCode;

@@ -439,6 +439,7 @@ class Renderer: NSObject, MTKViewDelegate {
             clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
             clearOctreeNodeBuffer(commandBuffer: commandBuffer, buffer: octreeNodesBuffer, count: layerOffsets.last! + layerSizes.last!)
             generateMortonCodes(commandBuffer: commandBuffer)
+            fillIndices(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, startIdx: 0, endIdx: sphereCount)
 
             // Initialize mortonCodeCountBuffer[0] to numSpheres (fast operation)
             let mortonCountPointer = mortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
