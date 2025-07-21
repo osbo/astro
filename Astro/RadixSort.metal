@@ -144,10 +144,6 @@ kernel void copyBuffer(device const ulong* input [[ buffer(0) ]],
                        device const uint* countBuffer [[ buffer(2) ]],
                        uint tid [[ thread_position_in_grid ]])
 {
-    uint count = countBuffer[0];
-    if(tid >= count) {
-        return;
-    }
     output[tid] = input[tid];
 }
 
@@ -156,9 +152,5 @@ kernel void copyIndices(device const uint* input [[ buffer(0) ]],
                         device const uint* countBuffer [[ buffer(2) ]],
                         uint tid [[ thread_position_in_grid ]])
 {
-    uint count = countBuffer[0];
-    if(tid >= count) {
-        return;
-    }
     output[tid] = input[tid];
 }

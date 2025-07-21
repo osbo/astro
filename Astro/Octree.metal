@@ -17,18 +17,17 @@ kernel void countUniqueMortonCodes(
     device uint* layerCountBuffer [[buffer(5)]],
     uint gid [[thread_position_in_grid]])
 {
-    if (gid < numSpheres) {
-        bool isUnique;
-        if (aggregate == 1) {
-            isUnique = ((sortedMortonCodes[gid] >> 3) != (sortedMortonCodes[gid - 1] >> 3));
-        } else {
-            isUnique = (sortedMortonCodes[gid] != sortedMortonCodes[gid - 1]);
-        }
-        if (isUnique) {
-            // Atomically increment the count if the current code is unique
-            uint index = atomic_fetch_add_explicit(uniqueMortonCodeCount, 1u, memory_order_relaxed);
-            uniqueMortonCodeStartIndices[index] = gid;
-        }
+    bool isUnique;
+    if (gid == 0) {
+        isUnique = true;
+    } else if (aggregate == 1) {
+        isUnique = (sortedMortonCodes[gid] >> 3) != (sortedMortonCodes[gid - 1] >> 3);
+    } else {
+        isUnique = (sortedMortonCodes[gid] != sortedMortonCodes[gid - 1]);
+    }
+    if (isUnique) {
+        uint index = atomic_fetch_add_explicit(uniqueMortonCodeCount, 1u, memory_order_relaxed);
+        uniqueMortonCodeStartIndices[index] = gid;
     }
 }
 
@@ -180,7 +179,7 @@ kernel void aggregateNodes(
     }
 
     uint64_t firstMortonCode = sortedMortonCodesBuffer[childStartIdx];
-    uint64_t shiftedMortonCode = firstMortonCode >> (BITS_PER_LAYER * layer);
+    uint64_t shiftedMortonCode = firstMortonCode >> BITS_PER_LAYER;
     OctreeNode node;
     node.mortonCode = shiftedMortonCode;
     node.centerOfMass = finalCenterOfMass;

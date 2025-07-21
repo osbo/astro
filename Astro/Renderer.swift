@@ -82,6 +82,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var colors: [ColorType] = []
     
     // Add arrays to store per-layer offsets and sizes
+    let maxLayers: Int = 9
     var layerOffsets: [Int] = []
     var layerSizes: [Int] = []
     var layer: Int = 0
@@ -302,13 +303,17 @@ class Renderer: NSObject, MTKViewDelegate {
         self.mortonCodeCountBuffer.label = "Morton Code Count Buffer"
         self.layerCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
         self.layerCountBuffer.label = "Layer Count Buffer"
-        // Calculate per-layer sizes and offsets
-        let maxLayers = 8
+        // Calculate per-layer sizes and offsets for 9 layers, each removing 3 bits (24, 21, ..., 0)
+        let maxLayers = 9
+        let totalBits = 24
+        let bitsPerLayer = 3
         layerSizes = []
         layerOffsets = []
         var offset = 0
         for layer in 0..<maxLayers {
-            let size = min(sphereCount, Int(pow(8.0, Double(maxLayers - 1 - layer))))
+            let bitsRemaining = totalBits - bitsPerLayer * layer
+            let possibleValues = bitsRemaining >= 0 ? 1 << bitsRemaining : 1
+            let size = min(sphereCount, possibleValues)
             layerSizes.append(size)
             layerOffsets.append(offset)
             offset += size
@@ -435,6 +440,7 @@ class Renderer: NSObject, MTKViewDelegate {
         commandBuffer.label = "Main Command Buffer"
         
         if sphereCount > 0 {
+            commandBuffer.pushDebugGroup("Layer 0: Leaf Nodes")
             clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
             clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
             clearOctreeNodeBuffer(commandBuffer: commandBuffer, buffer: octreeNodesBuffer, count: layerOffsets.last! + layerSizes.last!)
@@ -445,6 +451,9 @@ class Renderer: NSObject, MTKViewDelegate {
             let mortonCountPointer = mortonCodeCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
             mortonCountPointer[0] = UInt32(numSpheres)
 
+            // Clear sorted buffers after sorting, before copy/final phase
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
             radixSorter.sort(commandBuffer: commandBuffer,
                              input: unsortedMortonCodesBuffer,
                              inputIndices: unsortedIndicesBuffer,
@@ -452,10 +461,11 @@ class Renderer: NSObject, MTKViewDelegate {
                              outputIndices: sortedIndicesBuffer,
                              estimatedLength: UInt32(sphereCount),
                              actualCountBuffer: mortonCodeCountBuffer)
-             countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false)
-             aggregateLeafNodes(commandBuffer: commandBuffer)
-             self.layer = 1 // Start at first internal layer
-             buildInternalNodes(commandBuffer: commandBuffer)
+            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false)
+            aggregateLeafNodes(commandBuffer: commandBuffer)
+            commandBuffer.popDebugGroup()
+            self.layer = 1 // Start at first internal layer
+            buildInternalNodes(commandBuffer: commandBuffer)
         }
         
         if usePostProcessing {
@@ -593,16 +603,17 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func buildInternalNodes(commandBuffer: MTLCommandBuffer) {
-        let maxLayers = 8
         while self.layer < maxLayers {
+            commandBuffer.pushDebugGroup("Layer \(self.layer): Internal Nodes")
+            let inputNodeCount = layerSizes[self.layer - 1]
             let nodeCount = layerSizes[self.layer]
             let inputOffset = layerOffsets[self.layer - 1]
             let outputOffset = layerOffsets[self.layer]
 //            print("Building internal nodes for layer \(self.layer) with \(nodeCount) nodes, input offset: \(inputOffset), output offset: \(outputOffset)")
 
             // 1. Clear buffers for this layer's sort
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: nodeCount, dataType: UInt64.self)
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: nodeCount, dataType: UInt32.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
 
             // 2. Sort the Morton codes for this layer
             radixSorter.sort(commandBuffer: commandBuffer,
@@ -610,15 +621,15 @@ class Renderer: NSObject, MTKViewDelegate {
                              inputIndices: unsortedIndicesBuffer,
                              output: sortedMortonCodesBuffer,
                              outputIndices: sortedIndicesBuffer,
-                             estimatedLength: UInt32(nodeCount),
+                             estimatedLength: UInt32(inputNodeCount),
                              actualCountBuffer: mortonCodeCountBuffer)
 
             // 3. Count unique Morton codes for this layer
             countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true)
 
             // 4. Clear buffers for next unsorted output
-            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedMortonCodesBuffer, count: nodeCount, dataType: UInt64.self)
-            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, count: nodeCount, dataType: UInt32.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
 
             // 5. Aggregate nodes for this layer
             aggregateInternalNodes(commandBuffer: commandBuffer,
@@ -628,6 +639,7 @@ class Renderer: NSObject, MTKViewDelegate {
 
             // Only increment layer after successful aggregation
             self.layer += 1
+            commandBuffer.popDebugGroup()
         }
     }
     

@@ -31,22 +31,53 @@ class MetalKernelsRadixSort {
     private var tempIndices: MTLBuffer!
     private var copyKeysPipeline: MTLComputePipelineState!
     private var copyIndicesPipeline: MTLComputePipelineState!
+    private var clearBuffer64Pipeline: MTLComputePipelineState!
+    private var clearBuffer32Pipeline: MTLComputePipelineState!
 
     init(device: MTLDevice) {
         self.device = device
         self.scanKernel = ScanKernel(device: device)
         self.splitKernel = SplitKernel(device: device)
-        
         // Create copy pipelines
         guard let library = device.makeDefaultLibrary() else {
             fatalError("Failed to get default Metal library for copy pipelines")
         }
-        
         do {
             self.copyKeysPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "copyBuffer")!)
             self.copyIndicesPipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "copyIndices")!)
+            self.clearBuffer64Pipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "clearBuffer64")!)
+            self.clearBuffer32Pipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "clearBuffer")!)
         } catch {
-            fatalError("Failed to create copy pipelines: \(error)")
+            fatalError("Failed to create copy/clear pipelines: \(error)")
+        }
+    }
+
+    private func clearInternalBuffers(commandBuffer: MTLCommandBuffer) {
+        // Clear tempKeys (UInt64)
+        if let tempKeys = tempKeys {
+            let count = tempKeys.length / MemoryLayout<UInt64>.stride
+            if let encoder = commandBuffer.makeComputeCommandEncoder() {
+                encoder.label = "Clear TempKeys Buffer"
+                encoder.setComputePipelineState(clearBuffer64Pipeline)
+                encoder.setBuffer(tempKeys, offset: 0, index: 0)
+                let tgSize = MTLSize(width: 64, height: 1, depth: 1)
+                let tgCount = MTLSize(width: (count + 63) / 64, height: 1, depth: 1)
+                encoder.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+                encoder.endEncoding()
+            }
+        }
+        // Clear tempIndices (UInt32)
+        if let tempIndices = tempIndices {
+            let count = tempIndices.length / MemoryLayout<UInt32>.stride
+            if let encoder = commandBuffer.makeComputeCommandEncoder() {
+                encoder.label = "Clear TempIndices Buffer"
+                encoder.setComputePipelineState(clearBuffer32Pipeline)
+                encoder.setBuffer(tempIndices, offset: 0, index: 0)
+                let tgSize = MTLSize(width: 64, height: 1, depth: 1)
+                let tgCount = MTLSize(width: (count + 63) / 64, height: 1, depth: 1)
+                encoder.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+                encoder.endEncoding()
+            }
         }
     }
 
@@ -79,6 +110,10 @@ class MetalKernelsRadixSort {
 
         setMaxLength(estimatedLength)
 
+        // --- Clear tempKeys and tempIndices before sort ---
+        clearInternalBuffers(commandBuffer: commandBuffer)
+        // --- End clear ---
+
         var keysIn = input
         var keysOut = tempKeys!
         var indicesIn = inputIndices
@@ -108,23 +143,20 @@ class MetalKernelsRadixSort {
         // Copy final results to output buffers using compute kernels
         guard let copyEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         copyEncoder.label = "Radix Sort Final Copy"
-        
         // Copy keys
         copyEncoder.setComputePipelineState(copyKeysPipeline)
         copyEncoder.setBuffer(keysIn, offset: 0, index: 0)
         copyEncoder.setBuffer(output, offset: 0, index: 1)
-        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2) // Pass mortonCodeCountBuffer as count buffer
         let threadGroupSize = MTLSize(width: 512, height: 1, depth: 1)
         let threadGroups = MTLSize(width: (Int(estimatedLength) + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
         copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        
         // Copy indices
         copyEncoder.setComputePipelineState(copyIndicesPipeline)
         copyEncoder.setBuffer(indicesIn, offset: 0, index: 0)
         copyEncoder.setBuffer(outputIndices, offset: 0, index: 1)
-        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2) // Pass mortonCodeCountBuffer as count buffer
         copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        
         copyEncoder.endEncoding()
     }
 }
