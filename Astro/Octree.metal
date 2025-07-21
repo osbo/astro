@@ -3,6 +3,11 @@
 
 using namespace metal;
 
+#define NUM_LAYERS 8
+#define BITS_PER_LAYER 3
+#define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
+#define UNUSED_BITS (63 - USED_BITS)
+
 kernel void countUniqueMortonCodes(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
     device atomic_uint* uniqueMortonCodeCount [[buffer(1)]],
@@ -121,8 +126,10 @@ kernel void aggregateNodes(
     constant uint& inputOffset [[buffer(5)]],
     constant uint& outputOffset [[buffer(6)]],
     constant uint& layer [[buffer(7)]],
-    device uint64_t* unsortedMortonCodesBuffer [[buffer(8)]],
-    device uint* unsortedIndicesBuffer [[buffer(9)]],
+    constant uint& inputLayerSize [[buffer(8)]],
+    constant uint& outputLayerSize [[buffer(9)]],
+    device uint64_t* unsortedMortonCodesBuffer [[buffer(10)]],
+    device uint* unsortedIndicesBuffer [[buffer(11)]],
     uint gid [[thread_position_in_grid]])
 {
     uint numUnique = mortonCodeCountBuffer[0];
@@ -143,6 +150,10 @@ kernel void aggregateNodes(
     
     for (uint i = childStartIdx; i < childEndIdx; i++) {
         uint nodeIndex = sortedIndicesBuffer[i] + inputOffset;
+        // Robust bounds check for nodeIndex
+        if (nodeIndex < inputOffset || nodeIndex >= inputOffset + inputLayerSize) {
+            return;
+        }
         OctreeNode childNode = octreeNodesBuffer[nodeIndex];
 
         totalMass += childNode.totalMass;
@@ -169,7 +180,7 @@ kernel void aggregateNodes(
     }
 
     uint64_t firstMortonCode = sortedMortonCodesBuffer[childStartIdx];
-    uint64_t shiftedMortonCode = firstMortonCode >> 3;
+    uint64_t shiftedMortonCode = firstMortonCode >> (BITS_PER_LAYER * layer);
     OctreeNode node;
     node.mortonCode = shiftedMortonCode;
     node.centerOfMass = finalCenterOfMass;
@@ -181,7 +192,13 @@ kernel void aggregateNodes(
         node.children[i] = children[i];
     }
 
-    octreeNodesBuffer[gid + outputOffset] = node;
+    // Robust bounds check for output index
+    uint outputIndex = gid + outputOffset;
+    if (outputIndex < outputOffset || outputIndex >= outputOffset + outputLayerSize) {
+        return;
+    }
+
+    octreeNodesBuffer[outputIndex] = node;
     unsortedMortonCodesBuffer[gid] = shiftedMortonCode;
     unsortedIndicesBuffer[gid] = gid;
 

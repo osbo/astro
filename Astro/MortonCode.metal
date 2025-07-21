@@ -37,6 +37,13 @@ kernel void generateMortonCodes(device const PositionMass *positions [[buffer(0)
     
     // Generate Morton code using optimized bit interleaving
     uint64_t mortonCode = interleaveBitsOptimized(x, y, z);
+
+    // Shift to keep only the top N bits (for octree layers)
+    #define NUM_LAYERS 8
+    #define BITS_PER_LAYER 3
+    #define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
+    #define UNUSED_BITS (63 - USED_BITS)
+    mortonCode = mortonCode >> UNUSED_BITS;
     
     // Store morton code and index
     mortonCodes[particleIndex] = mortonCode;
