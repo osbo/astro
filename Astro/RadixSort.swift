@@ -25,19 +25,23 @@ class MetalKernelsRadixSort {
     private let device: MTLDevice
     private let scanKernel: ScanKernel
     private let splitKernel: SplitKernel
+    private let maxLength: UInt32
 
     // Intermediate buffers for ping-ponging during the sort
     private var tempKeys: MTLBuffer!
     private var tempIndices: MTLBuffer!
+    private var tempKeysB: MTLBuffer!
+    private var tempIndicesB: MTLBuffer!
     private var copyKeysPipeline: MTLComputePipelineState!
     private var copyIndicesPipeline: MTLComputePipelineState!
     private var clearBuffer64Pipeline: MTLComputePipelineState!
     private var clearBuffer32Pipeline: MTLComputePipelineState!
 
-    init(device: MTLDevice) {
+    init(device: MTLDevice, maxLength: UInt32) {
         self.device = device
-        self.scanKernel = ScanKernel(device: device)
-        self.splitKernel = SplitKernel(device: device)
+        self.maxLength = maxLength
+        self.scanKernel = ScanKernel(device: device, maxLength: maxLength)
+        self.splitKernel = SplitKernel(device: device, maxLength: maxLength)
         // Create copy pipelines
         guard let library = device.makeDefaultLibrary() else {
             fatalError("Failed to get default Metal library for copy pipelines")
@@ -50,6 +54,16 @@ class MetalKernelsRadixSort {
         } catch {
             fatalError("Failed to create copy/clear pipelines: \(error)")
         }
+        let requiredKeySize = Int(maxLength) * MemoryLayout<UInt64>.stride
+        let requiredIndexSize = Int(maxLength) * MemoryLayout<UInt32>.stride
+        tempKeys = device.makeBuffer(length: requiredKeySize, options: .storageModePrivate)
+        tempKeys.label = "Radix Sort Temp Keys"
+        tempKeysB = device.makeBuffer(length: requiredKeySize, options: .storageModePrivate)
+        tempKeysB.label = "Radix Sort Temp Keys B"
+        tempIndices = device.makeBuffer(length: requiredIndexSize, options: .storageModePrivate)
+        tempIndices.label = "Radix Sort Temp Indices"
+        tempIndicesB = device.makeBuffer(length: requiredIndexSize, options: .storageModePrivate)
+        tempIndicesB.label = "Radix Sort Temp Indices B"
     }
 
     private func clearInternalBuffers(commandBuffer: MTLCommandBuffer) {
@@ -81,23 +95,6 @@ class MetalKernelsRadixSort {
         }
     }
 
-    func setMaxLength(_ maxLength: UInt32) {
-        let requiredKeySize = Int(maxLength) * MemoryLayout<UInt64>.stride
-        let requiredIndexSize = Int(maxLength) * MemoryLayout<UInt32>.stride
-
-        if tempKeys == nil || tempKeys.length < requiredKeySize {
-            tempKeys = device.makeBuffer(length: requiredKeySize, options: .storageModePrivate)
-            tempKeys.label = "Radix Sort Temp Keys"
-        }
-        if tempIndices == nil || tempIndices.length < requiredIndexSize {
-            tempIndices = device.makeBuffer(length: requiredIndexSize, options: .storageModePrivate)
-            tempIndices.label = "Radix Sort Temp Indices"
-        }
-
-        splitKernel.setMaxLength(maxLength)
-        scanKernel.setMaxLength(maxLength)
-    }
-
     func sort(commandBuffer: MTLCommandBuffer,
               input: MTLBuffer,
               inputIndices: MTLBuffer,
@@ -107,17 +104,50 @@ class MetalKernelsRadixSort {
               actualCountBuffer: MTLBuffer) {
 
         guard estimatedLength > 0 else { return }
+        // Fully clear all internal buffers before copying, to avoid stale data
+        let clearBuffers: [(MTLBuffer?, MTLComputePipelineState, Int)] = [
+            (tempKeys, clearBuffer64Pipeline, Int(maxLength)),
+            (tempKeysB, clearBuffer64Pipeline, Int(maxLength)),
+            (tempIndices, clearBuffer32Pipeline, Int(maxLength)),
+            (tempIndicesB, clearBuffer32Pipeline, Int(maxLength))
+        ]
+        for (buffer, pipeline, count) in clearBuffers {
+            if let buffer = buffer, let encoder = commandBuffer.makeComputeCommandEncoder() {
+                encoder.label = "Clear Internal Buffer"
+                encoder.setComputePipelineState(pipeline)
+                encoder.setBuffer(buffer, offset: 0, index: 0)
+                let tgSize = MTLSize(width: 64, height: 1, depth: 1)
+                let tgCount = MTLSize(width: (count + 63) / 64, height: 1, depth: 1)
+                encoder.dispatchThreadgroups(tgCount, threadsPerThreadgroup: tgSize)
+                encoder.endEncoding()
+            }
+        }
 
-        setMaxLength(estimatedLength)
+        // 1. Copy input to tempKeys/tempIndices
+        if let copyEncoder = commandBuffer.makeComputeCommandEncoder() {
+            copyEncoder.label = "Radix Sort Initial Copy"
+            // Copy keys
+            copyEncoder.setComputePipelineState(copyKeysPipeline)
+            copyEncoder.setBuffer(input, offset: 0, index: 0)
+            copyEncoder.setBuffer(tempKeys, offset: 0, index: 1)
+            copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+            let threadGroupSize = MTLSize(width: 512, height: 1, depth: 1)
+            let threadGroups = MTLSize(width: (Int(estimatedLength) + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
+            copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+            // Copy indices
+            copyEncoder.setComputePipelineState(copyIndicesPipeline)
+            copyEncoder.setBuffer(inputIndices, offset: 0, index: 0)
+            copyEncoder.setBuffer(tempIndices, offset: 0, index: 1)
+            copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+            copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+            copyEncoder.endEncoding()
+        }
 
-        // --- Clear tempKeys and tempIndices before sort ---
-        clearInternalBuffers(commandBuffer: commandBuffer)
-        // --- End clear ---
-
-        var keysIn = input
-        var keysOut = tempKeys!
-        var indicesIn = inputIndices
-        var indicesOut = tempIndices!
+        // 2. Flip-flop sort between tempKeys/tempKeysB and tempIndices/tempIndicesB
+        var keysIn = tempKeys!
+        var keysOut = tempKeysB!
+        var indicesIn = tempIndices!
+        var indicesOut = tempIndicesB!
 
         guard let compute = commandBuffer.makeComputeCommandEncoder() else { return }
         compute.label = "Radix Sort Pass"
@@ -131,33 +161,31 @@ class MetalKernelsRadixSort {
                                       bit: UInt32(i),
                                       estimatedLength: estimatedLength,
                                       actualCountBuffer: actualCountBuffer)
-
             compute.memoryBarrier(resources: [keysOut, indicesOut])
-
             swap(&keysIn, &keysOut)
             swap(&indicesIn, &indicesOut)
         }
-
         compute.endEncoding()
 
-        // Copy final results to output buffers using compute kernels
-        guard let copyEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        copyEncoder.label = "Radix Sort Final Copy"
-        // Copy keys
-        copyEncoder.setComputePipelineState(copyKeysPipeline)
-        copyEncoder.setBuffer(keysIn, offset: 0, index: 0)
-        copyEncoder.setBuffer(output, offset: 0, index: 1)
-        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2) // Pass mortonCodeCountBuffer as count buffer
-        let threadGroupSize = MTLSize(width: 512, height: 1, depth: 1)
-        let threadGroups = MTLSize(width: (Int(estimatedLength) + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
-        copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        // Copy indices
-        copyEncoder.setComputePipelineState(copyIndicesPipeline)
-        copyEncoder.setBuffer(indicesIn, offset: 0, index: 0)
-        copyEncoder.setBuffer(outputIndices, offset: 0, index: 1)
-        copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2) // Pass mortonCodeCountBuffer as count buffer
-        copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        copyEncoder.endEncoding()
+        // 3. Copy final sorted buffer to output
+        if let copyEncoder = commandBuffer.makeComputeCommandEncoder() {
+            copyEncoder.label = "Radix Sort Final Copy"
+            // Copy keys
+            copyEncoder.setComputePipelineState(copyKeysPipeline)
+            copyEncoder.setBuffer(keysIn, offset: 0, index: 0)
+            copyEncoder.setBuffer(output, offset: 0, index: 1)
+            copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+            let threadGroupSize = MTLSize(width: 512, height: 1, depth: 1)
+            let threadGroups = MTLSize(width: (Int(estimatedLength) + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
+            copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+            // Copy indices
+            copyEncoder.setComputePipelineState(copyIndicesPipeline)
+            copyEncoder.setBuffer(indicesIn, offset: 0, index: 0)
+            copyEncoder.setBuffer(outputIndices, offset: 0, index: 1)
+            copyEncoder.setBuffer(actualCountBuffer, offset: 0, index: 2)
+            copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+            copyEncoder.endEncoding()
+        }
     }
 }
 
@@ -172,7 +200,7 @@ fileprivate class ScanKernel {
     private var aux2Buffer: MTLBuffer!
     private var auxSmallBuffer: MTLBuffer!
 
-    init(device: MTLDevice) {
+    init(device: MTLDevice, maxLength: UInt32) {
         self.device = device
         guard let library = device.makeDefaultLibrary() else {
             fatalError("Failed to get default Metal library for ScanKernel")
@@ -184,33 +212,18 @@ fileprivate class ScanKernel {
         } catch {
             fatalError("Failed to create scan pipelines: \(error)")
         }
-    }
-
-    func setMaxLength(_ maxLength: UInt32) {
         let threadgroupSize = 512
-        // Ensure maxLength is at least 1 to avoid creating a zero-sized buffer
         let adjustedLength = max(1, maxLength)
         let numThreadgroups = (Int(adjustedLength) + (threadgroupSize * 2) - 1) / (threadgroupSize * 2)
         let requiredAuxSize = max(1, numThreadgroups) * MemoryLayout<UInt32>.size
-
-        if auxBuffer == nil || auxBuffer.length < requiredAuxSize {
-            auxBuffer = device.makeBuffer(length: requiredAuxSize, options: .storageModePrivate)
-            auxBuffer.label = "Scan Aux Buffer"
-        }
-
-        // aux2Buffer needs to be large enough to hold the scanned results of auxBuffer
+        auxBuffer = device.makeBuffer(length: requiredAuxSize, options: .storageModePrivate)
+        auxBuffer.label = "Scan Aux Buffer"
         let requiredAux2Size = requiredAuxSize
-        if aux2Buffer == nil || aux2Buffer.length < requiredAux2Size {
-            aux2Buffer = device.makeBuffer(length: requiredAux2Size, options: .storageModePrivate)
-            aux2Buffer.label = "Scan Aux2 Buffer"
-        }
-
-        // auxSmallBuffer for single-threadgroup scans
+        aux2Buffer = device.makeBuffer(length: requiredAux2Size, options: .storageModePrivate)
+        aux2Buffer.label = "Scan Aux2 Buffer"
         let requiredAuxSmallSize = MemoryLayout<UInt32>.size
-        if auxSmallBuffer == nil || auxSmallBuffer.length < requiredAuxSmallSize {
-            auxSmallBuffer = device.makeBuffer(length: requiredAuxSmallSize, options: .storageModePrivate)
-            auxSmallBuffer.label = "Scan Aux Small Buffer"
-        }
+        auxSmallBuffer = device.makeBuffer(length: requiredAuxSmallSize, options: .storageModePrivate)
+        auxSmallBuffer.label = "Scan Aux Small Buffer"
     }
 
     func encodeScanTo(_ compute: MTLComputeCommandEncoder,
@@ -278,9 +291,9 @@ fileprivate class SplitKernel {
     private var eBuffer: MTLBuffer!
     private var fBuffer: MTLBuffer!
 
-    init(device: MTLDevice) {
+    init(device: MTLDevice, maxLength: UInt32) {
         self.device = device
-        self.scanKernel = ScanKernel(device: device)
+        self.scanKernel = ScanKernel(device: device, maxLength: maxLength)
         guard let library = device.makeDefaultLibrary() else {
             fatalError("Failed to get default Metal library for SplitKernel")
         }
@@ -291,19 +304,11 @@ fileprivate class SplitKernel {
         } catch {
             fatalError("Failed to create split pipelines: \(error)")
         }
-    }
-
-    func setMaxLength(_ maxLength: UInt32) {
         let requiredSize = Int(max(1, maxLength)) * MemoryLayout<UInt32>.stride
-        if eBuffer == nil || eBuffer.length < requiredSize {
-            eBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
-            fBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
-            eBuffer.label = "Radix eBuffer"
-            fBuffer.label = "Radix fBuffer"
-        }
-        
-        // Ensure the scan kernel is also initialized with the same max length
-        scanKernel.setMaxLength(maxLength)
+        eBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
+        fBuffer = device.makeBuffer(length: requiredSize, options: .storageModePrivate)
+        eBuffer.label = "Radix eBuffer"
+        fBuffer.label = "Radix fBuffer"
     }
 
     func encodeSplitTo(_ compute: MTLComputeCommandEncoder,

@@ -9,6 +9,7 @@ using namespace metal;
 #else
 #import <Foundation/Foundation.h>
 #import <simd/simd.h>
+#include <stdint.h>
 #endif
 
 // Structs shared between Metal and Swift/C
@@ -41,6 +42,8 @@ typedef struct {
 #endif
 } ColorType;
 
+
+
 typedef struct {
 #ifdef __METAL_VERSION__
     uint64_t mortonCode;
@@ -72,6 +75,16 @@ typedef struct {
     simd_float3 cameraPosition;
 #endif
 } GlobalUniforms;
+
+typedef struct {
+#ifdef __METAL_VERSION__
+    float4 colors[8];
+    float4 positions[8];
+#else
+    simd_float4 colors[8];
+    simd_float4 positions[8];
+#endif
+} LightingInfluences;
 
 
 #endif /* bridge_h */

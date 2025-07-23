@@ -17,6 +17,9 @@ kernel void countUniqueMortonCodes(
     device uint* layerCountBuffer [[buffer(5)]],
     uint gid [[thread_position_in_grid]])
 {
+    if (gid >= numSpheres) {
+        return;
+    }
     bool isUnique;
     if (gid == 0) {
         isUnique = true;
@@ -131,77 +134,100 @@ kernel void aggregateNodes(
     device uint* unsortedIndicesBuffer [[buffer(11)]],
     uint gid [[thread_position_in_grid]])
 {
-    uint numUnique = mortonCodeCountBuffer[0];
-    if (gid >= numUnique) {
-        return;
-    }
+     uint numUnique = mortonCodeCountBuffer[0];
+     if (gid >= numUnique) {
+         return;
+     }
 
-    uint childStartIdx = uniqueIndicesBuffer[gid];
-    uint childEndIdx = (gid + 1 < numUnique) ? uniqueIndicesBuffer[gid + 1] : numUnique;
+     uint childStartIdx = uniqueIndicesBuffer[gid];
+     uint childEndIdx = (gid + 1 < numUnique) ? uniqueIndicesBuffer[gid + 1] : numUnique;
 
-    float3 totalCenterOfMass = float3(0.0, 0.0, 0.0);
-    float totalMass = 0.0;
-    float4 totalEmittedColor = float4(0.0, 0.0, 0.0, 0.0);
-    float3 totalEmittedColorCenter = float3(0.0, 0.0, 0.0);
-    uint32_t children[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-    int childCount = 0;
-    uint numSuns = 0;
+     float3 totalCenterOfMass = float3(0.0, 0.0, 0.0);
+     float totalMass = 0.0;
+     float4 totalEmittedColor = float4(0.0, 0.0, 0.0, 0.0);
+     float3 totalEmittedColorCenter = float3(0.0, 0.0, 0.0);
+     uint32_t children[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+     int childCount = 0;
+     uint numSuns = 0;
     
-    for (uint i = childStartIdx; i < childEndIdx; i++) {
-        uint nodeIndex = sortedIndicesBuffer[i] + inputOffset;
-        // Robust bounds check for nodeIndex
-        // if (nodeIndex < inputOffset || nodeIndex >= inputOffset + inputLayerSize) {
-        //     return;
-        // }
-        OctreeNode childNode = octreeNodesBuffer[nodeIndex];
+     for (uint i = childStartIdx; i < childEndIdx; i++) {
+         uint nodeIndex = sortedIndicesBuffer[i] + inputOffset;
+         // Robust bounds check for nodeIndex
+         // if (nodeIndex < inputOffset || nodeIndex >= inputOffset + inputLayerSize) {
+         //     return;
+         // }
+         OctreeNode childNode = octreeNodesBuffer[nodeIndex];
 
-        totalMass += childNode.totalMass;
-        totalCenterOfMass += childNode.centerOfMass * childNode.totalMass;
+         totalMass += childNode.totalMass;
+         totalCenterOfMass += childNode.centerOfMass * childNode.totalMass;
         
-        if (childNode.emittedColor.w > 0.0) {
-            totalEmittedColor += childNode.emittedColor;
-            totalEmittedColorCenter += childNode.emittedColorCenter;
-            numSuns += 1;
-        }
+         if (childNode.emittedColor.w > 0.0) {
+             totalEmittedColor += childNode.emittedColor;
+             totalEmittedColorCenter += childNode.emittedColorCenter;
+             numSuns += 1;
+         }
 
-        if (childCount < 8) {
-            children[childCount] = nodeIndex;
-            childCount += 1;
-        }
-    }
+         if (childCount < 8) {
+             children[childCount] = nodeIndex;
+             childCount += 1;
+         }
+     }
 
-    float3 finalCenterOfMass = (totalMass > 0.0) ? (totalCenterOfMass / totalMass) : float3(0.0, 0.0, 0.0);
-    float4 finalEmittedColor = totalEmittedColor;
-    float3 finalEmittedColorCenter = totalEmittedColorCenter;
+     float3 finalCenterOfMass = (totalMass > 0.0) ? (totalCenterOfMass / totalMass) : float3(0.0, 0.0, 0.0);
+     float4 finalEmittedColor = totalEmittedColor;
+     float3 finalEmittedColorCenter = totalEmittedColorCenter;
     
-    if (numSuns > 0) {
-        finalEmittedColorCenter /= numSuns;
-    }
+     if (numSuns > 0) {
+         finalEmittedColorCenter /= numSuns;
+     }
 
-    uint64_t firstMortonCode = sortedMortonCodesBuffer[childStartIdx];
-    uint64_t shiftedMortonCode = firstMortonCode >> BITS_PER_LAYER;
-    OctreeNode node;
-    node.mortonCode = shiftedMortonCode;
-    node.centerOfMass = finalCenterOfMass;
-    node.totalMass = totalMass;
-    node.emittedColor = finalEmittedColor;
-    node.emittedColorCenter = finalEmittedColorCenter;
-    node.layer = layer;
-    for (int i = 0; i < 8; i++) {
-        node.children[i] = children[i];
-    }
+     uint64_t firstMortonCode = sortedMortonCodesBuffer[childStartIdx];
+     uint64_t shiftedMortonCode = firstMortonCode >> BITS_PER_LAYER;
+     OctreeNode node;
+     node.mortonCode = shiftedMortonCode;
+     node.centerOfMass = finalCenterOfMass;
+     node.totalMass = totalMass;
+     node.emittedColor = finalEmittedColor;
+     node.emittedColorCenter = finalEmittedColorCenter;
+     node.layer = layer;
+     for (int i = 0; i < 8; i++) {
+         node.children[i] = children[i];
+     }
 
-    // Robust bounds check for output index
-    uint outputIndex = gid + outputOffset;
-    // if (outputIndex < outputOffset || outputIndex >= outputOffset + outputLayerSize) {
-    //     return;
-    // }
+     // Robust bounds check for output index
+     uint outputIndex = gid + outputOffset;
+     // if (outputIndex < outputOffset || outputIndex >= outputOffset + outputLayerSize) {
+     //     return;
+     // }
 
-    octreeNodesBuffer[outputIndex] = node;
-    unsortedMortonCodesBuffer[gid] = shiftedMortonCode;
-    unsortedIndicesBuffer[gid] = gid;
+     octreeNodesBuffer[outputIndex] = node;
+     unsortedMortonCodesBuffer[gid] = shiftedMortonCode;
+     unsortedIndicesBuffer[gid] = gid;
 
-    return;
+     return;
+
+//    uint numUnique = mortonCodeCountBuffer[0];
+//    if (gid >= numUnique) {
+//        return;
+//    }
+//    uint outputIndex = gid + outputOffset;
+//
+//    OctreeNode node;
+//    node.mortonCode = 1;
+//    node.centerOfMass = float3(0.0, 0.0, 0.0);
+//    node.totalMass = 0.0;
+//    node.emittedColor = float4(0.0, 0.0, 0.0, 0.0);
+//    node.emittedColorCenter = float3(0.0, 0.0, 0.0);
+//    for (int i = 0; i < 8; i++) {
+//        node.children[i] = 0;
+//    }
+//    node.layer = layer;
+//
+//    octreeNodesBuffer[outputIndex] = node;
+//    unsortedMortonCodesBuffer[gid] = 1;
+//    unsortedIndicesBuffer[gid] = gid;
+//
+//    return;
 }
 
 kernel void extractMortonCodes(

@@ -19,8 +19,8 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
-    var numPlanets: Int32 = 100
-    var numDust: Int32 = 100000
+    var numPlanets: Int32 = 10
+    var numDust: Int32 = 0
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -59,6 +59,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var mortonCodeCountBuffer: MTLBuffer!
     var layerCountBuffer: MTLBuffer!
     var octreeNodesBuffer: MTLBuffer!
+    var lightingInfluencesBuffer: MTLBuffer!
     
     var pipelinesCreated = false
     var generateMortonCodesPipelineState: MTLComputePipelineState!
@@ -72,6 +73,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var clearBufferPipelineState: MTLComputePipelineState!
     var clearBuffer64PipelineState: MTLComputePipelineState!
     var clearOctreeNodeBufferPipelineState: MTLComputePipelineState!
+    var barnesHutPipelineState: MTLComputePipelineState!
     
     var radixSorter: MetalKernelsRadixSort!
     
@@ -86,6 +88,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var layerOffsets: [Int] = []
     var layerSizes: [Int] = []
     var layer: Int = 0
+    
     
     init(_ parent: ContentView) {
         self.parent = parent
@@ -112,7 +115,7 @@ class Renderer: NSObject, MTKViewDelegate {
         
         setupDepthStencilStates()
         createTextureSampler(device: device)
-        radixSorter = MetalKernelsRadixSort(device: device)
+        radixSorter = MetalKernelsRadixSort(device: device, maxLength: UInt32(numSpheres))
         // Defer makeBuffers and setMaxLength until size is known
     }
     
@@ -228,6 +231,10 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let clearOctreeNodeBufferFunction = library.makeFunction(name: "clearOctreeNodeBuffer") else {
             fatalError("Could not find clearOctreeNodeBuffer function in Octree.metal.")
         }
+        guard let barnesHutKernel = library.makeFunction(name: "barnesHut") else {
+            fatalError("Could not find barnesHut kernel.")
+        }
+        barnesHutPipelineState = try! device.makeComputePipelineState(function: barnesHutKernel)
         
         let spherePipelineDescriptor = MTLRenderPipelineDescriptor()
         spherePipelineDescriptor.label = "Sphere Render Pipeline"
@@ -318,11 +325,12 @@ class Renderer: NSObject, MTKViewDelegate {
             layerOffsets.append(offset)
             offset += size
         }
-        print("layerOffsets: \(layerOffsets)")
-        print("layerSizes: \(layerSizes)")
+//        print("layerOffsets: \(layerOffsets)")
+//        print("layerSizes: \(layerSizes)")
         self.octreeNodesBuffer = device.makeBuffer(length: MemoryLayout<OctreeNode>.stride * offset, options: .storageModeShared)
         self.octreeNodesBuffer.label = "Octree Nodes Buffer"
-        radixSorter.setMaxLength(UInt32(sphereCount))
+        self.lightingInfluencesBuffer = device.makeBuffer(length: MemoryLayout<LightingInfluences>.stride * Int(numPlanets), options: .storageModeShared)
+        self.lightingInfluencesBuffer.label = "Lighting Influences Buffer"
     }
     
     // ... (keep your existing makeSpheres, fillIndices, etc.)
@@ -466,6 +474,8 @@ class Renderer: NSObject, MTKViewDelegate {
             commandBuffer.popDebugGroup()
             self.layer = 1 // Start at first internal layer
             buildInternalNodes(commandBuffer: commandBuffer)
+
+            // barnesHut(commandBuffer: commandBuffer, dt: deltaTime)
         }
         
         if usePostProcessing {
@@ -600,10 +610,12 @@ class Renderer: NSObject, MTKViewDelegate {
         let threadGroups = MTLSizeMake((nodeCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
+
+//        print("inputOffset: \(inputOffsetVal), outputOffset: \(outputOffsetVal), layer: \(layerVal), inputLayerSize: \(inputLayerSizeVal), outputLayerSize: \(outputLayerSizeVal)")
     }
 
     func buildInternalNodes(commandBuffer: MTLCommandBuffer) {
-        while self.layer < maxLayers {
+        while self.layer < maxLayers{
             commandBuffer.pushDebugGroup("Layer \(self.layer): Internal Nodes")
             let inputNodeCount = layerSizes[self.layer - 1]
             let nodeCount = layerSizes[self.layer]
@@ -612,8 +624,8 @@ class Renderer: NSObject, MTKViewDelegate {
 //            print("Building internal nodes for layer \(self.layer) with \(nodeCount) nodes, input offset: \(inputOffset), output offset: \(outputOffset)")
 
             // 1. Clear buffers for this layer's sort
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
+           clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
+           clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
 
             // 2. Sort the Morton codes for this layer
             radixSorter.sort(commandBuffer: commandBuffer,
@@ -623,6 +635,8 @@ class Renderer: NSObject, MTKViewDelegate {
                              outputIndices: sortedIndicesBuffer,
                              estimatedLength: UInt32(inputNodeCount),
                              actualCountBuffer: mortonCodeCountBuffer)
+
+//            print("inputNodeCount: \(inputNodeCount)")
 
             // 3. Count unique Morton codes for this layer
             countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true)
@@ -736,5 +750,28 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setComputePipelineState(resetUIntBufferPipelineState)
         computeEncoder.setBuffer(buffer, offset: 0, index: 0)
         computeEncoder.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+    }
+
+    func barnesHut(commandBuffer: MTLCommandBuffer, dt: Float) {
+        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        computeEncoder.label = "Barnes-Hut"
+        computeEncoder.setComputePipelineState(barnesHutPipelineState)
+        computeEncoder.setBuffer(octreeNodesBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(velocityRadiusBuffer, offset: 0, index: 2)
+        computeEncoder.setBuffer(colorTypeBuffer, offset: 0, index: 3)
+        computeEncoder.setBuffer(lightingInfluencesBuffer, offset: 0, index: 4)
+        var dtVal = dt
+        computeEncoder.setBytes(&dtVal, length: MemoryLayout<Float>.size, index: 5)
+        var rootNodeIndexVal = UInt32(layerOffsets.last!)
+        computeEncoder.setBytes(&rootNodeIndexVal, length: MemoryLayout<UInt32>.size, index: 6)
+        var numStarsVal = UInt32(numStars)
+        computeEncoder.setBytes(&numStarsVal, length: MemoryLayout<UInt32>.size, index: 7)
+        var thetaVal: Float = 0.7
+        computeEncoder.setBytes(&thetaVal, length: MemoryLayout<Float>.size, index: 8)
+        let threadGroupSize = MTLSize(width: 64, height: 1, depth: 1)
+        let threadGroups = MTLSize(width: (sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
+        computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
     }
 }
