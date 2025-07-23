@@ -124,7 +124,7 @@ kernel void aggregateNodes(
     device const uint64_t* sortedMortonCodesBuffer [[buffer(1)]],
     device const uint* sortedIndicesBuffer [[buffer(2)]],
     device const uint* uniqueIndicesBuffer [[buffer(3)]],
-    device const uint* mortonCodeCountBuffer [[buffer(4)]],
+    device const uint* parentCountBuffer [[buffer(4)]],
     constant uint& inputOffset [[buffer(5)]],
     constant uint& outputOffset [[buffer(6)]],
     constant uint& layer [[buffer(7)]],
@@ -132,15 +132,17 @@ kernel void aggregateNodes(
     constant uint& outputLayerSize [[buffer(9)]],
     device uint64_t* unsortedMortonCodesBuffer [[buffer(10)]],
     device uint* unsortedIndicesBuffer [[buffer(11)]],
+    device const uint* childCountBuffer [[buffer(12)]],
     uint gid [[thread_position_in_grid]])
 {
-     uint numUnique = mortonCodeCountBuffer[0];
+     uint numUnique = parentCountBuffer[0];
      if (gid >= numUnique) {
+         // This parent node is not valid and should not be processed.
          return;
      }
 
      uint childStartIdx = uniqueIndicesBuffer[gid];
-     uint childEndIdx = (gid + 1 < numUnique) ? uniqueIndicesBuffer[gid + 1] : numUnique;
+     uint childEndIdx = (gid + 1 < numUnique) ? uniqueIndicesBuffer[gid + 1] : childCountBuffer[0];
 
      float3 totalCenterOfMass = float3(0.0, 0.0, 0.0);
      float totalMass = 0.0;
@@ -152,10 +154,6 @@ kernel void aggregateNodes(
     
      for (uint i = childStartIdx; i < childEndIdx; i++) {
          uint nodeIndex = sortedIndicesBuffer[i] + inputOffset;
-         // Robust bounds check for nodeIndex
-         // if (nodeIndex < inputOffset || nodeIndex >= inputOffset + inputLayerSize) {
-         //     return;
-         // }
          OctreeNode childNode = octreeNodesBuffer[nodeIndex];
 
          totalMass += childNode.totalMass;
@@ -191,7 +189,7 @@ kernel void aggregateNodes(
      node.emittedColorCenter = finalEmittedColorCenter;
      node.layer = layer;
      for (int i = 0; i < 8; i++) {
-         node.children[i] = children[i];
+         node.children[i] = (i < childCount) ? children[i] : 0;
      }
 
      // Robust bounds check for output index
@@ -295,4 +293,13 @@ kernel void clearOctreeNodeBuffer(
     emptyNode.layer = 0;
     
     buffer[gid] = emptyNode;
+}
+
+kernel void copyAndResetParentCount(device uint* parentCountBuffer [[buffer(0)]],
+                                    device uint* childCountBuffer [[buffer(1)]],
+                                    uint tid [[thread_position_in_grid]]) {
+    if (tid == 0) {
+        childCountBuffer[0] = parentCountBuffer[0];
+        parentCountBuffer[0] = 0;
+    }
 }
