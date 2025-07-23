@@ -1,6 +1,11 @@
 import MetalKit
 import MetalPerformanceShaders
 import simd
+#if canImport(bridge_h)
+import bridge_h
+#endif
+
+let INVALID_MORTON_CODE: UInt64 = 0xFFFFFFFFFFFFFFFF
 
 class Renderer: NSObject, MTKViewDelegate {
     var parent: ContentView
@@ -19,7 +24,7 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
-    var numPlanets: Int32 = 10
+    var numPlanets: Int32 = 100
     var numDust: Int32 = 100000
     
     var numSpheres: Int32 {
@@ -366,12 +371,11 @@ class Renderer: NSObject, MTKViewDelegate {
         // Choose the appropriate pipeline state based on data type
         if T.self == UInt64.self {
             computeEncoder.setComputePipelineState(clearBuffer64PipelineState)
+            computeEncoder.setBuffer(buffer, offset: 0, index: 0)
         } else {
             computeEncoder.setComputePipelineState(clearBufferPipelineState)
+            computeEncoder.setBuffer(buffer, offset: 0, index: 0)
         }
-        
-        computeEncoder.setBuffer(buffer, offset: 0, index: 0)
-        
         let threadGroupSize = MTLSizeMake(64, 1, 1)
         let threadGroups = MTLSizeMake((count + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)

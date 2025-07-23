@@ -258,6 +258,7 @@ fileprivate class ScanKernel {
             compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
             compute.dispatchThreadgroups(MTLSize(width: numThreadgroups, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
+            compute.memoryBarrier(resources: [output, self.auxBuffer])
             
             // Pass 2: Scan the auxiliary buffer
             var auxLength = UInt32(numThreadgroups)
@@ -269,6 +270,7 @@ fileprivate class ScanKernel {
             compute.setBytes(&zeroff, length: MemoryLayout<UInt32>.size, index: ScanBufferIndex.zeroff.rawValue)
             compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
+            compute.memoryBarrier(resources: [self.aux2Buffer])
 
             // Pass 3: Fix up the main buffer
             compute.setComputePipelineState(prefixFixupPipeline)

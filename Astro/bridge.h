@@ -86,5 +86,12 @@ typedef struct {
 #endif
 } LightingInfluences;
 
+// Sentinel value for invalid Morton code (shared between Metal and Swift)
+#ifdef __METAL_VERSION__
+#define INVALID_MORTON_CODE 0xFFFFFFFFFFFFFFFFull
+#else
+#define INVALID_MORTON_CODE 0xFFFFFFFFFFFFFFFFull
+#endif
+
 
 #endif /* bridge_h */

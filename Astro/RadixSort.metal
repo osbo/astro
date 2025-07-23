@@ -33,7 +33,6 @@ kernel void prefixFixup(device uint *input [[ buffer(ScanBufferIndexInput) ]],
                          uint threadIdx [[ thread_position_in_threadgroup ]],
                          uint blockIdx [[ threadgroup_position_in_grid ]])
 {
-    threadgroup_barrier(mem_flags::mem_device); // Ensure aux is fully computed
     uint t = threadIdx;
     uint start = t + 2 * blockIdx * SCAN_BLOCKSIZE;
     uint block_sum = aux[blockIdx];

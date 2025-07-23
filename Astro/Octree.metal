@@ -8,6 +8,7 @@ using namespace metal;
 #define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
 #define UNUSED_BITS (63 - USED_BITS)
 #define INVALID_CHILD 0xFFFFFFFFu // Sentinel for invalid child index
+#define INVALID_MORTON_CODE 0xFFFFFFFFFFFFFFFFu // Sentinel for invalid Morton code
 
 kernel void countUniqueMortonCodes(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
@@ -275,7 +276,7 @@ kernel void clearBuffer64(
     device uint64_t* buffer [[buffer(0)]],
     uint gid [[thread_position_in_grid]])
 {
-    buffer[gid] = 0;
+    buffer[gid] = INVALID_MORTON_CODE;
 }
 
 kernel void clearOctreeNodeBuffer(
