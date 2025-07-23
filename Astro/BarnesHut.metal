@@ -23,7 +23,7 @@ kernel void barnesHut(
     stack[stackPtr++] = rootNodeIndex; // root node index
     
     // Define gravitational constant and softening
-    const float g = 100000; // Or use a simulation-appropriate value
+    const float g = 1; // Or use a simulation-appropriate value
     const float softening = 1e-2f;
     float3 totalForce = float3(0.0f);
 

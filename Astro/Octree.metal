@@ -7,6 +7,7 @@ using namespace metal;
 #define BITS_PER_LAYER 3
 #define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
 #define UNUSED_BITS (63 - USED_BITS)
+#define INVALID_CHILD 0xFFFFFFFFu // Sentinel for invalid child index
 
 kernel void countUniqueMortonCodes(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
@@ -73,7 +74,7 @@ kernel void aggregateLeafNodes(
     float totalMass = 0.0;
     float4 totalEmittedColor = float4(0.0, 0.0, 0.0, 0.0);
     float3 totalEmittedColorCenter = float3(0.0, 0.0, 0.0);
-    uint32_t children[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    uint32_t children[8] = {INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD};
     uint numSuns = 0;
     
     for (uint i = childStartIdx; i < childEndIdx; i++) {
@@ -108,7 +109,7 @@ kernel void aggregateLeafNodes(
     leafNode.emittedColorCenter = finalEmittedColorCenter;
     leafNode.layer = 0;
     for (int i = 0; i < 8; i++) {
-        leafNode.children[i] = children[i];
+        leafNode.children[i] = INVALID_CHILD;
     }
 
     octreeNodesBuffer[gid] = leafNode;
@@ -148,7 +149,7 @@ kernel void aggregateNodes(
      float totalMass = 0.0;
      float4 totalEmittedColor = float4(0.0, 0.0, 0.0, 0.0);
      float3 totalEmittedColorCenter = float3(0.0, 0.0, 0.0);
-     uint32_t children[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+     uint32_t children[8] = {INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD};
      int childCount = 0;
      uint numSuns = 0;
     
@@ -189,7 +190,7 @@ kernel void aggregateNodes(
      node.emittedColorCenter = finalEmittedColorCenter;
      node.layer = layer;
      for (int i = 0; i < 8; i++) {
-         node.children[i] = (i < childCount) ? children[i] : 0;
+         node.children[i] = (i < childCount) ? children[i] : INVALID_CHILD;
      }
 
      // Robust bounds check for output index
@@ -288,7 +289,7 @@ kernel void clearOctreeNodeBuffer(
     emptyNode.emittedColor = float4(0.0, 0.0, 0.0, 0.0);
     emptyNode.emittedColorCenter = float3(0.0, 0.0, 0.0);
     for (int i = 0; i < 8; i++) {
-        emptyNode.children[i] = 0;
+        emptyNode.children[i] = INVALID_CHILD;
     }
     emptyNode.layer = 0;
     

@@ -20,7 +20,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
     var numPlanets: Int32 = 10
-    var numDust: Int32 = 0
+    var numDust: Int32 = 100000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -483,7 +483,7 @@ class Renderer: NSObject, MTKViewDelegate {
             self.layer = 1 // Start at first internal layer
             buildInternalNodes(commandBuffer: commandBuffer)
 
-            // barnesHut(commandBuffer: commandBuffer, dt: deltaTime)
+//             barnesHut(commandBuffer: commandBuffer, dt: deltaTime)
         }
         
         if usePostProcessing {
