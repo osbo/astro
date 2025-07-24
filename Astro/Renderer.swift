@@ -23,9 +23,9 @@ class Renderer: NSObject, MTKViewDelegate {
     
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
-    var numStars: Int32 = 0
-    var numPlanets: Int32 = 10
-    var numDust: Int32 = 0
+    var numStars: Int32 = 3
+    var numPlanets: Int32 = 100
+    var numDust: Int32 = 200000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -373,8 +373,10 @@ class Renderer: NSObject, MTKViewDelegate {
 //        print("layerSizes: \(layerSizes)")
         self.octreeNodesBuffer = device.makeBuffer(length: MemoryLayout<OctreeNode>.stride * offset, options: .storageModeShared)
         self.octreeNodesBuffer.label = "Octree Nodes Buffer"
-        self.lightingInfluencesBuffer = device.makeBuffer(length: MemoryLayout<LightingInfluences>.stride * Int(numPlanets), options: .storageModeShared)
-        self.lightingInfluencesBuffer.label = "Lighting Influences Buffer"
+        if numPlanets < 0 {
+            self.lightingInfluencesBuffer = device.makeBuffer(length: MemoryLayout<LightingInfluences>.stride * Int(numPlanets), options: .storageModeShared)
+            self.lightingInfluencesBuffer.label = "Lighting Influences Buffer"
+        }
     }
     
     // ... (keep your existing makeSpheres, fillIndices, etc.)
@@ -644,9 +646,9 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setBuffer(unsortedMortonCodesBuffer, offset: 0, index: 7)
         computeEncoder.setBuffer(unsortedIndicesBuffer, offset: 0, index: 8)
         // let numNodes = parentCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
-        // if numNodes == 0 { 
+        // if numNodes == 0 {
         //     computeEncoder.endEncoding()
-        //     return 
+        //     return
         // }
         let threadGroupSize = MTLSizeMake(64, 1, 1)
         let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
@@ -659,9 +661,9 @@ class Renderer: NSObject, MTKViewDelegate {
         guard self.layer < layerSizes.count else { return }
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Aggregate Internal Nodes Layer \(self.layer)"
-        if nodeCount <= 0 { 
+        if nodeCount <= 0 {
             computeEncoder.endEncoding()
-            return 
+            return
         }
 
         computeEncoder.setComputePipelineState(aggregateNodesPipelineState)
