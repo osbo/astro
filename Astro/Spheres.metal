@@ -26,8 +26,7 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
                                device const PositionMass *positions [[buffer(2)]],
                                device const VelocityRadius *velocities [[buffer(3)]],
                                device const ColorType *colors [[buffer(4)]],
-                               device const LightingInfluences *lightingInfluences [[buffer(5)]],
-                               constant uint &numStars [[buffer(6)]],
+                               constant uint &numStars [[buffer(5)]],
                                uint instanceID [[instance_id]])
 {
     VertexOut out;
@@ -41,18 +40,19 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
     out.normal = in.normal;
     out.worldPosition = worldPosition;
     if (colorData.type == 1) { // planet
-        // Planets: aggregate lighting influences
-        LightingInfluences influences = lightingInfluences[instanceID - numStars];
-        float3 baseColor = colorData.color.rgb;
+        // Planets: aggregate lighting influences with Lambertian diffuse
         float3 litColor = float3(0.0f);
-        for (uint i = 0; i < 8; ++i) {
-            float3 lightColor = influences.colors[i].rgb;
-            float3 lightDir = influences.positions[i].xyz;
-            float normDist = length(lightDir) / LIGHT_ATTENUATION_DISTANCE;
-            float att = 1.0f / (normDist * normDist + 1.0f);
-            float3 lightDirNorm = normalize(lightDir);
-            float NdotL = max(dot(normalize(in.normal), lightDirNorm), 0.0f);
-            litColor += lightColor * NdotL * att;
+        // Compute world-space normal for a sphere
+        float3 normal = normalize(worldPosition - positionData.position);
+        for (uint i = 0; i < numStars; ++i) {
+            float3 lightColor = colors[i].color.rgb;
+            float3 lightPos = positions[i].position;
+            float3 lightDir = normalize(lightPos - worldPosition);
+            float lightDist = length(lightPos - worldPosition);
+            float normDist = max(lightDist / LIGHT_ATTENUATION_DISTANCE, 1e-9f);
+            float att = 1.0f / (normDist * normDist);
+            float NdotL = max(dot(normal, lightDir), 0.0f);
+            litColor += lightColor * att * NdotL;
         }
         out.color = float4(litColor, 1.0f);
     } else {

@@ -11,12 +11,10 @@ kernel void barnesHut(
     device PositionMass* positionMassBuffer [[buffer(1)]],
     device VelocityRadius* velocityRadiusBuffer [[buffer(2)]],
     device ColorType* colorTypeBuffer [[buffer(3)]],
-    device LightingInfluences* lightingInfluencesBuffer [[buffer(4)]],
-    device float3* forceBuffer [[buffer(5)]],
-    constant uint& rootNodeIndex [[buffer(6)]],
-    constant uint& numStars [[buffer(7)]],
-    constant uint& numSpheres [[buffer(8)]],
-    constant float& theta [[buffer(9)]],
+    device float3* forceBuffer [[buffer(4)]],
+    constant uint& rootNodeIndex [[buffer(5)]],
+    constant uint& numSpheres [[buffer(6)]],
+    constant float& theta [[buffer(7)]],
     uint gid [[thread_position_in_grid]])
 {
     if (gid >= numSpheres) return;
@@ -34,13 +32,6 @@ kernel void barnesHut(
     float myMass = positionMassBuffer[gid].mass;
     float myType = colorTypeBuffer[gid].type;
     float3 myColor = colorTypeBuffer[gid].color.rgb;
-
-    // Lighting aggregation
-    float3 dustTotalLight = float3(0.0f);
-    float dustTotalWeight = 0.0f;
-    float4 planetLightColors[8];
-    float4 planetLightPositions[8];
-    uint planetLightCount = 0;
 
     while (stackPtr > 0) {
         uint nodeIdx = stack[--stackPtr];
@@ -70,26 +61,6 @@ kernel void barnesHut(
             // }
 
             totalForce += force;
-
-            // Lighting aggregation
-            if (node.emittedColor.w > 0 && myType != 0) {
-                float3 lightSourcePos = node.emittedColorCenter;
-                float3 lightSourceColor = node.emittedColor.rgb;
-                float3 lightSourceDir = normalize(lightSourcePos - myPos);
-                float normDist = dist / LIGHT_ATTENUATION_DISTANCE;
-                float lightIntensity = 1.0f / (normDist * normDist + 1.0f); // Unified attenuation
-                float3 lightColor = lightSourceColor * lightIntensity;
-
-                if (myType == 1 && planetLightCount < 8) { // Planet
-                    planetLightColors[planetLightCount] = float4(lightColor, 1.0f);
-                    planetLightPositions[planetLightCount] = float4(lightSourceDir, 0.0f); // Store direction
-                    planetLightCount++;
-                } else if (myType == 2) { // Dust
-                    // Dust: accumulate weighted color
-                    dustTotalLight += lightColor;
-                    dustTotalWeight += 1.0f;
-                }
-            }
         } else if (!isLeaf) {
             for (uint i = 0; i < 8; ++i) {
                 uint childIdx = node.children[i];
@@ -102,20 +73,32 @@ kernel void barnesHut(
     // Write totalForce to forceBuffer
     forceBuffer[gid] = totalForce;
 
-    // Write lighting results
-    if (myType == 1) { // Planet
-        LightingInfluences influences;
-        for (uint i = 0; i < 8; ++i) {
-            influences.colors[i] = (i < planetLightCount) ? planetLightColors[i] : float4(0.0f);
-            influences.positions[i] = (i < planetLightCount) ? planetLightPositions[i] : float4(0.0f);
-        }
-        lightingInfluencesBuffer[gid - numStars] = influences; // Planets are after stars
-    } else if (myType == 2) { // Dust
-        float3 dustColor = (dustTotalWeight > 0.0f) ? (dustTotalLight / dustTotalWeight) : float3(0.0f);
-        colorTypeBuffer[gid].color.rgb = dustColor;
-        colorTypeBuffer[gid].color.w = max(dustColor.r, max(dustColor.g, dustColor.b)); // Alpha = brightness
-    }
     // Stars: do not aggregate lighting
+}
+
+kernel void lightingPass(
+    device PositionMass* positionMassBuffer [[buffer(0)]],
+    device ColorType* colorTypeBuffer [[buffer(1)]],
+    constant uint& numSpheres [[buffer(2)]],
+    constant uint& numStars [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= numSpheres) return;
+    uint type = colorTypeBuffer[gid].type;
+    if (type != 2) return;
+    float3 position = positionMassBuffer[gid].position;
+    float3 totalLight = float3(0.0f);
+    for (uint i = 0; i < numStars; ++i) {
+        float3 lightSourcePos = positionMassBuffer[i].position;
+        float3 lightSourceColor = colorTypeBuffer[i].color.rgb;
+        float3 lightSourceDir = lightSourcePos - position;
+        float lightSourceDist = length(lightSourceDir);
+        float lightSourceDistNorm = max(lightSourceDist / LIGHT_ATTENUATION_DISTANCE, 1e-9f);
+        float att = 1.0f / (lightSourceDistNorm * lightSourceDistNorm);
+        totalLight += lightSourceColor * att;
+    }
+    colorTypeBuffer[gid].color.rgb = totalLight;
+    colorTypeBuffer[gid].color.w = max(totalLight.r, max(totalLight.g, totalLight.b));
 }
 
 kernel void updateSpheres(
