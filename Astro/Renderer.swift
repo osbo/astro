@@ -24,8 +24,8 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 3
-    var numPlanets: Int32 = 100
-    var numDust: Int32 = 100000
+    var numPlanets: Int32 = 10
+    var numDust: Int32 = 1000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -81,6 +81,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var clearOctreeNodeBufferPipelineState: MTLComputePipelineState!
     var barnesHutPipelineState: MTLComputePipelineState!
     var copyAndResetParentCountPipelineState: MTLComputePipelineState!
+    var copyLastScanToParentCountPipelineState: MTLComputePipelineState!
     
     var radixSorter: MetalKernelsRadixSort!
     
@@ -96,6 +97,14 @@ class Renderer: NSObject, MTKViewDelegate {
     var layerSizes: [Int] = []
     var layer: Int = 0
     
+    var flagsBuffer: MTLBuffer!
+    var scanBuffer: MTLBuffer!
+    var scanAuxBuffer: MTLBuffer!
+    
+    // 1. In class Renderer, add pipeline states:
+    var markUniquesPipelineState: MTLComputePipelineState!
+    var scatterUniquesPipelineState: MTLComputePipelineState!
+    var prefixSumPipelineState: MTLComputePipelineState!
     
     init(_ parent: ContentView) {
         self.parent = parent
@@ -241,6 +250,9 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let copyAndResetParentCountFunction = library.makeFunction(name: "copyAndResetParentCount") else {
             fatalError("Could not find copyAndResetParentCount function in Octree.metal.")
         }
+        guard let copyLastScanToParentCountFunction = library.makeFunction(name: "copyLastScanToParentCount") else {
+            fatalError("Could not find copyLastScanToParentCount function in Octree.metal.")
+        }
         guard let barnesHutKernel = library.makeFunction(name: "barnesHut") else {
             fatalError("Could not find barnesHut kernel.")
         }
@@ -292,8 +304,20 @@ class Renderer: NSObject, MTKViewDelegate {
             clearBuffer64PipelineState = try device.makeComputePipelineState(function: clearBuffer64Function)
             clearOctreeNodeBufferPipelineState = try device.makeComputePipelineState(function: clearOctreeNodeBufferFunction)
             copyAndResetParentCountPipelineState = try device.makeComputePipelineState(function: copyAndResetParentCountFunction)
+            copyLastScanToParentCountPipelineState = try device.makeComputePipelineState(function: copyLastScanToParentCountFunction)
         } catch {
             fatalError("Failed to create pipeline state: \(error)")
+        }
+        
+        // 2. In makePipelines(view:):
+        if let markUniquesFunction = library.makeFunction(name: "markUniques") {
+            markUniquesPipelineState = try! device.makeComputePipelineState(function: markUniquesFunction)
+        }
+        if let scatterUniquesFunction = library.makeFunction(name: "scatterUniques") {
+            scatterUniquesPipelineState = try! device.makeComputePipelineState(function: scatterUniquesFunction)
+        }
+        if let prefixSumFunction = library.makeFunction(name: "prefixSum") {
+            prefixSumPipelineState = try! device.makeComputePipelineState(function: prefixSumFunction)
         }
     }
     
@@ -323,6 +347,13 @@ class Renderer: NSObject, MTKViewDelegate {
         self.childCountBuffer.label = "Child Count Buffer"
         self.layerCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
         self.layerCountBuffer.label = "Layer Count Buffer"
+        self.flagsBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.flagsBuffer.label = "Flags Buffer"
+        self.scanBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.scanBuffer.label = "Scan Buffer"
+        let scanAuxSize = ((sphereCount + 2 * 512 - 1) / (2 * 512))
+        self.scanAuxBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * scanAuxSize, options: .storageModeShared)
+        self.scanAuxBuffer.label = "Scan Aux Buffer"
         // Calculate per-layer sizes and offsets for 9 layers, each removing 3 bits (24, 21, ..., 0)
         let maxLayers = 9
         let totalBits = 24
@@ -516,24 +547,56 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer, aggregate: Bool) {
-        copyAndResetParentCount(commandBuffer: commandBuffer)
+        // Only use the scan-based unique counting sequence
+        clearBuffer(commandBuffer: commandBuffer, buffer: flagsBuffer, count: sphereCount, dataType: UInt32.self)
+        clearBuffer(commandBuffer: commandBuffer, buffer: scanBuffer, count: sphereCount, dataType: UInt32.self)
         clearBuffer(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, count: sphereCount, dataType: UInt32.self)
-        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        computeEncoder.label = "Count Unique Morton Codes"
-        computeEncoder.setComputePipelineState(countUniqueMortonCodesPipelineState)
-        computeEncoder.setBuffer(sortedMortonCodesBuffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(parentCountBuffer, offset: 0, index: 1)
-        computeEncoder.setBuffer(uniqueIndicesBuffer, offset: 0, index: 2)
-        var numSpheresVal = UInt32(numSpheres)
-        computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 3)
-        var aggregateVal: UInt32 = aggregate ? 1 : 0
-        computeEncoder.setBytes(&aggregateVal, length: MemoryLayout<UInt32>.size, index: 4)
-        computeEncoder.setBuffer(layerCountBuffer, offset: 0, index: 5)
-        let threadGroupSize = MTLSizeMake(64, 1, 1)
-        let threadGroups = MTLSizeMake((sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
-        computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        computeEncoder.endEncoding()
-        // self.layer += 1 // No longer increment here
+        // 1. markUniques
+        if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
+            computeEncoder.label = "Mark Uniques"
+            computeEncoder.setComputePipelineState(markUniquesPipelineState)
+            computeEncoder.setBuffer(sortedMortonCodesBuffer, offset: 0, index: 0)
+            computeEncoder.setBuffer(flagsBuffer, offset: 0, index: 1)
+            var numSpheresVal = UInt32(numSpheres)
+            computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 2)
+            var aggregateVal: UInt32 = aggregate ? 1 : 0
+            computeEncoder.setBytes(&aggregateVal, length: MemoryLayout<UInt32>.size, index: 3)
+            let threadGroupSize = MTLSizeMake(64, 1, 1)
+            let threadGroups = MTLSizeMake((sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+            computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+            computeEncoder.endEncoding()
+        }
+        // 2. prefixSum
+        prefixSum(commandBuffer: commandBuffer, input: flagsBuffer, output: scanBuffer, length: sphereCount)
+        // 3. scatterUniques
+        if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
+            computeEncoder.label = "Scatter Uniques"
+            computeEncoder.setComputePipelineState(scatterUniquesPipelineState)
+            computeEncoder.setBuffer(flagsBuffer, offset: 0, index: 0)
+            computeEncoder.setBuffer(scanBuffer, offset: 0, index: 1)
+            computeEncoder.setBuffer(uniqueIndicesBuffer, offset: 0, index: 2)
+            var numSpheresVal = UInt32(numSpheres)
+            computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 3)
+            let threadGroupSize = MTLSizeMake(64, 1, 1)
+            let threadGroups = MTLSizeMake((sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+            computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+            computeEncoder.endEncoding()
+        }
+        // 4. copyLastScanToParentCount (GPU-side unique count)
+        if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
+            computeEncoder.label = "Copy Last Scan To Parent Count"
+            computeEncoder.setComputePipelineState(copyLastScanToParentCountPipelineState)
+            computeEncoder.setBuffer(scanBuffer, offset: 0, index: 0)
+            computeEncoder.setBuffer(flagsBuffer, offset: 0, index: 1)
+            computeEncoder.setBuffer(parentCountBuffer, offset: 0, index: 2)
+            computeEncoder.setBuffer(childCountBuffer, offset: 0, index: 3)
+            var countVal = UInt32(sphereCount)
+            computeEncoder.setBytes(&countVal, length: MemoryLayout<UInt32>.size, index: 4)
+            let threadGroupSize = MTLSizeMake(1, 1, 1)
+            let threadGroups = MTLSizeMake(1, 1, 1)
+            computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+            computeEncoder.endEncoding()
+        }
     }
 
     func unsortedLeafMortonCodes(commandBuffer: MTLCommandBuffer) {
@@ -796,6 +859,24 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setBuffer(childCountBuffer, offset: 0, index: 1)
         let threadGroupSize = MTLSizeMake(1, 1, 1)
         let threadGroups = MTLSizeMake(1, 1, 1)
+        computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
+        computeEncoder.endEncoding()
+    }
+
+    // 3. Add a prefixSum wrapper function:
+    func prefixSum(commandBuffer: MTLCommandBuffer, input: MTLBuffer, output: MTLBuffer, length: Int) {
+        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        computeEncoder.label = "Prefix Sum"
+        computeEncoder.setComputePipelineState(prefixSumPipelineState)
+        computeEncoder.setBuffer(input, offset: 0, index: 0) // input
+        computeEncoder.setBuffer(output, offset: 0, index: 1) // output
+        computeEncoder.setBuffer(scanAuxBuffer, offset: 0, index: 2) // aux
+        var lenVal = UInt32(length)
+        var zeroffVal: UInt32 = 0
+        computeEncoder.setBytes(&lenVal, length: MemoryLayout<UInt32>.size, index: 3)
+        computeEncoder.setBytes(&zeroffVal, length: MemoryLayout<UInt32>.size, index: 4)
+        let threadGroupSize = MTLSizeMake(512, 1, 1)
+        let threadGroups = MTLSizeMake((length + threadGroupSize.width * 2 - 1) / (threadGroupSize.width * 2), 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
     }

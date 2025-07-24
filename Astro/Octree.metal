@@ -306,3 +306,58 @@ kernel void copyAndResetParentCount(device atomic_uint* parentCountBuffer [[buff
         atomic_store_explicit(parentCountBuffer, 0, memory_order_relaxed);
     }
 }
+
+// New kernel: markUniques
+kernel void markUniques(
+    device const uint64_t* sortedMortonCodes [[buffer(0)]],
+    device uint* flags [[buffer(1)]],
+    constant uint& numSpheres [[buffer(2)]],
+    constant uint& aggregate [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= numSpheres) return;
+    if (sortedMortonCodes[gid] == INVALID_MORTON_CODE) {
+        flags[gid] = 0;
+        return;
+    }
+    bool isUnique;
+    if (gid == 0) {
+        isUnique = true;
+    } else if (aggregate == 1) {
+        isUnique = (sortedMortonCodes[gid] >> 3) != (sortedMortonCodes[gid - 1] >> 3);
+    } else {
+        isUnique = (sortedMortonCodes[gid] != sortedMortonCodes[gid - 1]);
+    }
+    flags[gid] = isUnique ? 1 : 0;
+}
+
+// New kernel: scatterUniques
+kernel void scatterUniques(
+    device const uint* flags [[buffer(0)]],
+    device const uint* scan [[buffer(1)]],
+    device uint* uniqueIndicesBuffer [[buffer(2)]],
+    constant uint& numSpheres [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= numSpheres) return;
+    if (flags[gid]) {
+        uint outIdx = scan[gid] - 1;
+        uniqueIndicesBuffer[outIdx] = gid;
+    }
+}
+
+// New kernel: copyLastScanToParentCount
+kernel void copyLastScanToParentCount(
+    device const uint* scanBuffer [[buffer(0)]],
+    device const uint* flagsBuffer [[buffer(1)]],
+    device uint* parentCountBuffer [[buffer(2)]],
+    device uint* childCountBuffer [[buffer(3)]],
+    constant uint& count [[buffer(4)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid == 0) {
+        uint lastIdx = count - 1;
+        childCountBuffer[0] = parentCountBuffer[0];
+        parentCountBuffer[0] = scanBuffer[lastIdx];
+    }
+}
