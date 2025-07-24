@@ -640,7 +640,7 @@ class Renderer: NSObject, MTKViewDelegate {
            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
 
-            // 2. Sort the Morton codes for this layer
+        //     // 2. Sort the Morton codes for this layer
             radixSorter.sort(commandBuffer: commandBuffer,
                              input: unsortedMortonCodesBuffer,
                              inputIndices: unsortedIndicesBuffer,
