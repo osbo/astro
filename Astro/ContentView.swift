@@ -98,7 +98,7 @@ struct ContentView: NSViewRepresentable {
             let delta = CGPoint(x: current.x - last.x, y: current.y - last.y)
             lastDragLocation = current
 
-            let sensitivity: Double = 0.005
+            let sensitivity: Double = 0.006
             renderer.camera.yaw   -= Double(delta.x) * sensitivity
             renderer.camera.pitch += Double(delta.y) * sensitivity
             renderer.camera.pitch = max(-Double.pi/2 + 0.01, min(Double.pi/2 - 0.01, renderer.camera.pitch))
@@ -106,13 +106,13 @@ struct ContentView: NSViewRepresentable {
 
         override func scrollWheel(with event: NSEvent) {
             let scrollAmount = event.deltaY
-            let zoomSensitivity: Float = 50 * 104.8575 // scale up
+            let zoomSensitivity: Float = 10000 // scale up
             let moveVector = renderer.camera.forward * Double(scrollAmount) * Double(zoomSensitivity)
             renderer.camera.targetPosition += moveVector
         }
 
         override func keyDown(with event: NSEvent) {
-            let speed: Float = 200 * 104.8575 // scale up
+            let speed: Float = 100000 // scale up
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "w":
                 renderer.camera.targetPosition += renderer.camera.up * Double(speed)

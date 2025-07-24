@@ -51,6 +51,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var spherePipelineState: MTLRenderPipelineState!
     var dustPipelineState: MTLRenderPipelineState!
     var postProcessPipelineState: MTLRenderPipelineState!
+    var planetPipelineState: MTLRenderPipelineState! // Add this property to the Renderer class
     
     var globalUniformsBuffer: MTLBuffer!
     var positionMassBuffer: MTLBuffer!
@@ -204,6 +205,9 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let fragmentFunction = library.makeFunction(name: "fragment_shader") else {
             fatalError("Could not find fragment_shader function.")
         }
+        guard let planetFragmentFunction = library.makeFunction(name: "planet_fragment_shader") else {
+            fatalError("Could not find planet_fragment_shader function.")
+        }
         guard let sphereVertexFunction = library.makeFunction(name: "sphere_vertex") else {
             fatalError("Could not find sphere_vertex function.")
         }
@@ -275,6 +279,14 @@ class Renderer: NSObject, MTKViewDelegate {
         spherePipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
         spherePipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
         
+        let planetPipelineDescriptor = MTLRenderPipelineDescriptor()
+        planetPipelineDescriptor.label = "Planet Render Pipeline"
+        planetPipelineDescriptor.vertexFunction = sphereVertexFunction
+        planetPipelineDescriptor.fragmentFunction = planetFragmentFunction
+        planetPipelineDescriptor.vertexDescriptor = MTKMetalVertexDescriptorFromModelIO(planetSphere.vertexDescriptor)
+        planetPipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
+        planetPipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
+        
         let dustPipelineDescriptor = MTLRenderPipelineDescriptor()
         dustPipelineDescriptor.label = "Dust Render Pipeline"
         dustPipelineDescriptor.vertexFunction = dustVertexFunction
@@ -299,6 +311,7 @@ class Renderer: NSObject, MTKViewDelegate {
         
         do {
             spherePipelineState = try device.makeRenderPipelineState(descriptor: spherePipelineDescriptor)
+            planetPipelineState = try device.makeRenderPipelineState(descriptor: planetPipelineDescriptor)
             dustPipelineState = try device.makeRenderPipelineState(descriptor: dustPipelineDescriptor)
             postProcessPipelineState = try device.makeRenderPipelineState(descriptor: postProcessPipelineDescriptor)
             generateMortonCodesPipelineState = try device.makeComputePipelineState(function: generateMortonCodesFunction)
@@ -785,8 +798,6 @@ class Renderer: NSObject, MTKViewDelegate {
         renderEncoder.setVertexBuffer(positionMassBuffer, offset: 0, index: 2)
         renderEncoder.setVertexBuffer(velocityRadiusBuffer, offset: 0, index: 3)
         renderEncoder.setVertexBuffer(colorTypeBuffer, offset: 0, index: 4)
-        var numStarsVal = UInt32(numStars)
-        renderEncoder.setVertexBytes(&numStarsVal, length: MemoryLayout<UInt32>.size, index: 5);
         
         var lastPipeline: MTLRenderPipelineState? = nil
         if numStars > 0 {
@@ -802,13 +813,17 @@ class Renderer: NSObject, MTKViewDelegate {
         }
         
         if numPlanets > 0 {
-            if lastPipeline !== spherePipelineState {
-                renderEncoder.setRenderPipelineState(spherePipelineState)
-                lastPipeline = spherePipelineState
+            if lastPipeline !== planetPipelineState {
+                renderEncoder.setRenderPipelineState(planetPipelineState)
+                lastPipeline = planetPipelineState
             }
             for (index, vertexBuffer) in planetSphere.vertexBuffers.enumerated() {
                 renderEncoder.setVertexBuffer(vertexBuffer.buffer, offset: vertexBuffer.offset, index: index)
             }
+            renderEncoder.setFragmentBuffer(positionMassBuffer, offset: 0, index: 2)
+            renderEncoder.setFragmentBuffer(colorTypeBuffer, offset: 0, index: 3)
+            var numStarsVal = UInt32(numStars)
+            renderEncoder.setFragmentBytes(&numStarsVal, length: MemoryLayout<UInt32>.size, index: 4)
             let submesh = planetSphere.submeshes[0]
             renderEncoder.drawIndexedPrimitives(type: submesh.primitiveType, indexCount: submesh.indexCount, indexType: submesh.indexType, indexBuffer: submesh.indexBuffer.buffer, indexBufferOffset: submesh.indexBuffer.offset, instanceCount: Int(numPlanets), baseVertex: 0, baseInstance: Int(numStars))
         }
