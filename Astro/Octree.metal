@@ -341,7 +341,7 @@ kernel void scatterUniques(
 {
     if (gid >= numSpheres) return;
     if (flags[gid]) {
-        uint outIdx = scan[gid] - 1;
+        uint outIdx = scan[gid];
         uniqueIndicesBuffer[outIdx] = gid;
     }
 }
@@ -358,6 +358,6 @@ kernel void copyLastScanToParentCount(
     if (tid == 0) {
         uint lastIdx = count - 1;
         childCountBuffer[0] = parentCountBuffer[0];
-        parentCountBuffer[0] = scanBuffer[lastIdx];
+        parentCountBuffer[0] = scanBuffer[lastIdx] + flagsBuffer[lastIdx];
     }
 }

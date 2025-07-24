@@ -23,9 +23,9 @@ class Renderer: NSObject, MTKViewDelegate {
     
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
-    var numStars: Int32 = 3
+    var numStars: Int32 = 0
     var numPlanets: Int32 = 10
-    var numDust: Int32 = 1000
+    var numDust: Int32 = 0
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -566,8 +566,12 @@ class Renderer: NSObject, MTKViewDelegate {
             computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
             computeEncoder.endEncoding()
         }
-        // 2. prefixSum
-        prefixSum(commandBuffer: commandBuffer, input: flagsBuffer, output: scanBuffer, length: sphereCount)
+        // 2. multi-pass prefixSum
+        if let compute = commandBuffer.makeComputeCommandEncoder() {
+            compute.label = "Prefix Sum"
+            radixSorter.scanKernel.encodeScanTo(compute, input: flagsBuffer, output: scanBuffer, length: UInt32(sphereCount))
+            compute.endEncoding()
+        }
         // 3. scatterUniques
         if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
             computeEncoder.label = "Scatter Uniques"
@@ -863,21 +867,5 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.endEncoding()
     }
 
-    // 3. Add a prefixSum wrapper function:
-    func prefixSum(commandBuffer: MTLCommandBuffer, input: MTLBuffer, output: MTLBuffer, length: Int) {
-        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        computeEncoder.label = "Prefix Sum"
-        computeEncoder.setComputePipelineState(prefixSumPipelineState)
-        computeEncoder.setBuffer(input, offset: 0, index: 0) // input
-        computeEncoder.setBuffer(output, offset: 0, index: 1) // output
-        computeEncoder.setBuffer(scanAuxBuffer, offset: 0, index: 2) // aux
-        var lenVal = UInt32(length)
-        var zeroffVal: UInt32 = 0
-        computeEncoder.setBytes(&lenVal, length: MemoryLayout<UInt32>.size, index: 3)
-        computeEncoder.setBytes(&zeroffVal, length: MemoryLayout<UInt32>.size, index: 4)
-        let threadGroupSize = MTLSizeMake(512, 1, 1)
-        let threadGroups = MTLSizeMake((length + threadGroupSize.width * 2 - 1) / (threadGroupSize.width * 2), 1, 1)
-        computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        computeEncoder.endEncoding()
-    }
+    
 }

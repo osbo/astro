@@ -2,7 +2,7 @@ import Metal
 import Foundation
 
 // Swift equivalents of the Metal enums
-fileprivate enum ScanBufferIndex: Int {
+public enum ScanBufferIndex: Int {
     case input = 0
     case output = 1
     case aux = 2
@@ -10,7 +10,7 @@ fileprivate enum ScanBufferIndex: Int {
     case zeroff = 4
 }
 
-fileprivate enum SplitBufferIndex: Int {
+public enum SplitBufferIndex: Int {
     case input = 0
     case inputIndices = 1
     case output = 2
@@ -21,23 +21,23 @@ fileprivate enum SplitBufferIndex: Int {
     case f = 7
 }
 
-class MetalKernelsRadixSort {
-    private let device: MTLDevice
-    private let scanKernel: ScanKernel
-    private let splitKernel: SplitKernel
-    private let maxLength: UInt32
+public class MetalKernelsRadixSort {
+    public let device: MTLDevice
+    public let scanKernel: ScanKernel
+    public let splitKernel: SplitKernel
+    public let maxLength: UInt32
 
     // Intermediate buffers for ping-ponging during the sort
-    private var tempKeys: MTLBuffer!
-    private var tempIndices: MTLBuffer!
-    private var tempKeysB: MTLBuffer!
-    private var tempIndicesB: MTLBuffer!
-    private var copyKeysPipeline: MTLComputePipelineState!
-    private var copyIndicesPipeline: MTLComputePipelineState!
-    private var clearBuffer64Pipeline: MTLComputePipelineState!
-    private var clearBuffer32Pipeline: MTLComputePipelineState!
+    public var tempKeys: MTLBuffer!
+    public var tempIndices: MTLBuffer!
+    public var tempKeysB: MTLBuffer!
+    public var tempIndicesB: MTLBuffer!
+    public var copyKeysPipeline: MTLComputePipelineState!
+    public var copyIndicesPipeline: MTLComputePipelineState!
+    public var clearBuffer64Pipeline: MTLComputePipelineState!
+    public var clearBuffer32Pipeline: MTLComputePipelineState!
 
-    init(device: MTLDevice, maxLength: UInt32) {
+    public init(device: MTLDevice, maxLength: UInt32) {
         self.device = device
         self.maxLength = maxLength
         self.scanKernel = ScanKernel(device: device, maxLength: maxLength)
@@ -66,7 +66,7 @@ class MetalKernelsRadixSort {
         tempIndicesB.label = "Radix Sort Temp Indices B"
     }
 
-    private func clearInternalBuffers(commandBuffer: MTLCommandBuffer) {
+    public func clearInternalBuffers(commandBuffer: MTLCommandBuffer) {
         // Clear tempKeys (UInt64)
         if let tempKeys = tempKeys {
             let count = tempKeys.length / MemoryLayout<UInt64>.stride
@@ -95,7 +95,7 @@ class MetalKernelsRadixSort {
         }
     }
 
-    func sort(commandBuffer: MTLCommandBuffer,
+    public func sort(commandBuffer: MTLCommandBuffer,
               input: MTLBuffer,
               inputIndices: MTLBuffer,
               output: MTLBuffer,
@@ -191,16 +191,16 @@ class MetalKernelsRadixSort {
 
 // MARK: - Scan Kernel
 
-fileprivate class ScanKernel {
-    private let device: MTLDevice
-    private let prefixSumPipeline: MTLComputePipelineState
-    private let prefixFixupPipeline: MTLComputePipelineState
+public class ScanKernel {
+    public let device: MTLDevice
+    public let prefixSumPipeline: MTLComputePipelineState
+    public let prefixFixupPipeline: MTLComputePipelineState
 
-    private var auxBuffer: MTLBuffer!
-    private var aux2Buffer: MTLBuffer!
-    private var auxSmallBuffer: MTLBuffer!
+    public var auxBuffer: MTLBuffer!
+    public var aux2Buffer: MTLBuffer!
+    public var auxSmallBuffer: MTLBuffer!
 
-    init(device: MTLDevice, maxLength: UInt32) {
+    public init(device: MTLDevice, maxLength: UInt32) {
         self.device = device
         guard let library = device.makeDefaultLibrary() else {
             fatalError("Failed to get default Metal library for ScanKernel")
@@ -226,7 +226,7 @@ fileprivate class ScanKernel {
         auxSmallBuffer.label = "Scan Aux Small Buffer"
     }
 
-    func encodeScanTo(_ compute: MTLComputeCommandEncoder,
+    public func encodeScanTo(_ compute: MTLComputeCommandEncoder,
                       input: MTLBuffer,
                       output: MTLBuffer,
                       length: UInt32) {
@@ -285,15 +285,15 @@ fileprivate class ScanKernel {
 
 // MARK: - Split Kernel
 
-fileprivate class SplitKernel {
-    private let device: MTLDevice
-    private let prepPipeline: MTLComputePipelineState
-    private let scatterPipeline: MTLComputePipelineState
-    private let scanKernel: ScanKernel
-    private var eBuffer: MTLBuffer!
-    private var fBuffer: MTLBuffer!
+public class SplitKernel {
+    public let device: MTLDevice
+    public let prepPipeline: MTLComputePipelineState
+    public let scatterPipeline: MTLComputePipelineState
+    public let scanKernel: ScanKernel
+    public var eBuffer: MTLBuffer!
+    public var fBuffer: MTLBuffer!
 
-    init(device: MTLDevice, maxLength: UInt32) {
+    public init(device: MTLDevice, maxLength: UInt32) {
         self.device = device
         self.scanKernel = ScanKernel(device: device, maxLength: maxLength)
         guard let library = device.makeDefaultLibrary() else {
@@ -313,7 +313,7 @@ fileprivate class SplitKernel {
         fBuffer.label = "Radix fBuffer"
     }
 
-    func encodeSplitTo(_ compute: MTLComputeCommandEncoder,
+    public func encodeSplitTo(_ compute: MTLComputeCommandEncoder,
                        input: MTLBuffer,
                        inputIndices: MTLBuffer,
                        output: MTLBuffer,
