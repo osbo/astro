@@ -6,6 +6,8 @@ using namespace metal;
 struct VertexOut {
     float4 position [[position]];
     float4 color;
+    float3 normal;
+    float3 worldPosition;
 };
 
 struct DustVertexOut {
@@ -24,6 +26,8 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
                                device const PositionMass *positions [[buffer(2)]],
                                device const VelocityRadius *velocities [[buffer(3)]],
                                device const ColorType *colors [[buffer(4)]],
+                               device const LightingInfluences *lightingInfluences [[buffer(5)]],
+                               constant uint &numStars [[buffer(6)]],
                                uint instanceID [[instance_id]])
 {
     VertexOut out;
@@ -34,8 +38,27 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
     float3 worldPosition = (in.position * velocityData.radius) + positionData.position;
     float3 relPosition = worldPosition - globalUniforms.cameraPosition;
     out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(relPosition, 1.0);
-    out.color = colorData.color;
-    
+    out.normal = in.normal;
+    out.worldPosition = worldPosition;
+    if (colorData.type == 1) { // planet
+        // Planets: aggregate lighting influences
+        LightingInfluences influences = lightingInfluences[instanceID - numStars];
+        float3 baseColor = colorData.color.rgb;
+        float3 litColor = float3(0.0f);
+        for (uint i = 0; i < 8; ++i) {
+            float3 lightColor = influences.colors[i].rgb;
+            float3 lightDir = influences.positions[i].xyz;
+            float normDist = length(lightDir) / LIGHT_ATTENUATION_DISTANCE;
+            float att = 1.0f / (normDist * normDist + 1.0f);
+            float3 lightDirNorm = normalize(lightDir);
+            float NdotL = max(dot(normalize(in.normal), lightDirNorm), 0.0f);
+            litColor += lightColor * NdotL * att;
+        }
+        out.color = float4(litColor, 1.0f);
+    } else {
+        // Stars and dust: use color as is
+        out.color = colorData.color;
+    }
     return out;
 }
 
@@ -65,6 +88,6 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
 
 fragment float4 fragment_shader(VertexOut in [[stage_in]])
 {
-//    return in.color;
-    return (1,1,1,1);
+   return in.color;
+    // return (1,1,1,1);
 }

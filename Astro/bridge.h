@@ -93,5 +93,12 @@ typedef struct {
 #define INVALID_MORTON_CODE 0xFFFFFFFFFFFFFFFFull
 #endif
 
+// Shared lighting attenuation parameter for all shaders
+#ifdef __METAL_VERSION__
+constant float LIGHT_ATTENUATION_DISTANCE = 5e5;
+#else
+#define LIGHT_ATTENUATION_DISTANCE 5e5f
+#endif
+
 
 #endif /* bridge_h */
