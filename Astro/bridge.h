@@ -95,9 +95,9 @@ typedef struct {
 
 // Shared lighting attenuation parameter for all shaders
 #ifdef __METAL_VERSION__
-constant float LIGHT_ATTENUATION_DISTANCE = 5e5;
+constant float LIGHT_ATTENUATION_DISTANCE = 4e5;
 #else
-#define LIGHT_ATTENUATION_DISTANCE 5e5f
+#define LIGHT_ATTENUATION_DISTANCE 4e5f
 #endif
 
 

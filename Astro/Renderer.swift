@@ -24,7 +24,7 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 5
-    var numPlanets: Int32 = 100
+    var numPlanets: Int32 = 200 
     var numDust: Int32 = 500000
     
     var numSpheres: Int32 {
@@ -34,7 +34,7 @@ class Renderer: NSObject, MTKViewDelegate {
         return Int(numStars) + Int(numPlanets) + Int(numDust)
     }
     // Add this:
-    var octreeCount: Int { return Int(numStars) + Int(numPlanets) }
+    var octreeCount: Int { return Int(numStars) + Int(numPlanets)}
     
     var starRadius: Float = 50000.0
     var planetRadius: Float = 15000.0
@@ -893,7 +893,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         // print("Debug buffer:")
         // let ptr = debugBuffer.contents().bindMemory(to: simd_float4.self, capacity: sphereCount)
-        // let debugArray = Array(UnsafeBufferPointer(start: ptr, count: sphereCount))
+        // let debugArray = Array(UnsafeBufferPointer(start: ptr, count: 100))
         // for value in debugArray {
         //     print(value)
         // }

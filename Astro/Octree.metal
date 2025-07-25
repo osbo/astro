@@ -8,7 +8,6 @@ using namespace metal;
 #define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
 #define UNUSED_BITS (63 - USED_BITS)
 #define INVALID_CHILD 0xFFFFFFFFu // Sentinel for invalid child index
-#define INVALID_MORTON_CODE 0xFFFFFFFFFFFFFFFFu // Sentinel for invalid Morton code
 
 kernel void countUniqueMortonCodes(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
@@ -75,7 +74,6 @@ kernel void aggregateLeafNodes(
     float totalMass = 0.0;
     float4 totalEmittedColor = float4(0.0, 0.0, 0.0, 0.0);
     float3 totalEmittedColorCenter = float3(0.0, 0.0, 0.0);
-    uint32_t children[8] = {INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD, INVALID_CHILD};
     uint numSuns = 0;
     
     for (uint i = childStartIdx; i < childEndIdx; i++) {
