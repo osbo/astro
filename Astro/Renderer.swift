@@ -24,8 +24,8 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 5
-    var numPlanets: Int32 = 200
-    var numDust: Int32 = 300000
+    var numPlanets: Int32 = 100
+    var numDust: Int32 = 2000000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -37,10 +37,10 @@ class Renderer: NSObject, MTKViewDelegate {
     var octreeCount: Int { return Int(numStars) + Int(numPlanets) }
     
     var starRadius: Float = 50000.0
-    var planetRadius: Float = 10000.0
+    var planetRadius: Float = 15000.0
     var dustRadius: Float = 1
     var starMass: Float = 10000
-    var planetMass: Float = 100
+    var planetMass: Float = 1000
     var dustMass: Float = 1
     var initialVelocityMaximum: Float = 20000
     var spawnBounds: Float = 1000000
@@ -466,7 +466,7 @@ class Renderer: NSObject, MTKViewDelegate {
             var radius: Float = 0
             var color: simd_float4 = simd_float4(0,0,0,1)
             if i < numStars {
-                factor = 0.8
+                factor = 1.3
                 type = 0
                 mass = starMass
                 radius = starRadius
@@ -475,7 +475,7 @@ class Renderer: NSObject, MTKViewDelegate {
                 let srgbColor = oklabToSrgb(oklab: oklabColor)
                 color = simd_float4(srgbColor.x, srgbColor.y, srgbColor.z, 1.0)
             } else if i < numStars + numPlanets {
-                factor = 1
+                factor = 2
                 type = 1
                 mass = planetMass
                 radius = planetRadius

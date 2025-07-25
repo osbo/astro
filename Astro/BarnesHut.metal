@@ -3,7 +3,7 @@
 
 using namespace metal;
 
-#define MAX_STACK_SIZE 50000
+#define MAX_STACK_SIZE 60000
 #define INVALID_CHILD_INDEX 0xFFFFFFFFu
 
 // Morton code generation for 32-bit coordinates to 64-bit Morton codes
@@ -40,7 +40,7 @@ kernel void barnesHut(
     stack[stackPtr++] = rootNodeIndex; // root node index
     
     // Define gravitational constant and softening
-    const float g = 5e12; // Or use a simulation-appropriate value
+    const float g = 1e11; // Or use a simulation-appropriate value
     const float softening = 0.01;
     float3 totalForce = float3(0.0f);
 
@@ -73,7 +73,7 @@ kernel void barnesHut(
         // Determine isSelf by morton code prefix
         uint shift = 3 * (node.layer);
         bool isSelf = ((myMortonCode >> shift) == node.mortonCode);
-        if (useApprox && !isSelf) {
+        if (useApprox && !isSelf && dist > 10) {
             float3 force = g * node.totalMass * d / (distSqr * dist);
             debugTotalMass += node.totalMass;
             debugTotalDistSqr += distSqr;
@@ -87,14 +87,6 @@ kernel void barnesHut(
                 }
             }
         }
-    }
-
-    if (myType == 0) {
-        totalForce *= 1e3;
-    } else if (myType == 1) {
-        totalForce *= 1e1;
-    } else if (myType == 2) {
-        totalForce *= 1e-1;
     }
 
     // debugBuffer[gid] = float4(myType, length(totalForce)*debugTotalDistSqr, length(totalForce), debugTotalDistSqr);
@@ -127,7 +119,7 @@ kernel void lightingPass(
         totalLight += lightSourceColor * att;
     }
     colorTypeBuffer[gid].color.rgb = totalLight;
-    colorTypeBuffer[gid].color.w = min(max(totalLight.r, max(totalLight.g, totalLight.b)), 0.5);
+    colorTypeBuffer[gid].color.w = min(max(totalLight.r, max(totalLight.g, totalLight.b)), 0.3);
 }
 
 kernel void updateSpheres(
@@ -142,8 +134,17 @@ kernel void updateSpheres(
     if (gid >= numSpheres) return;
     float3 force = forceBuffer[gid];
     float mass = positionMassBuffer[gid].mass;
-    float3 acceleration = force / max(mass, 1e-9f);
-    float3 velocity = velocityRadiusBuffer[gid].velocity * 0.9999;
+    float3 acceleration = force;
+
+    if (colorTypeBuffer[gid].type == 0) {
+        acceleration *= 1e1;
+    } else if (colorTypeBuffer[gid].type == 1) {
+        acceleration *= 5e0;
+    } else if (colorTypeBuffer[gid].type == 2) {
+        acceleration *= 1e0;
+    }
+
+    float3 velocity = velocityRadiusBuffer[gid].velocity * 0.999;
     velocity += acceleration * dt;
     velocityRadiusBuffer[gid].velocity = velocity;
     float3 position = positionMassBuffer[gid].position;

@@ -115,9 +115,9 @@ struct ContentView: NSViewRepresentable {
             let speed: Float = 100000 // scale up
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "w":
-                renderer.camera.targetPosition += renderer.camera.up * Double(speed)
+                renderer.camera.targetPosition += SIMD3<Double>(0, 1, 0) * Double(speed)
             case "s":
-                renderer.camera.targetPosition -= renderer.camera.up * Double(speed)
+                renderer.camera.targetPosition -= SIMD3<Double>(0, 1, 0) * Double(speed)
             case "a":
                 renderer.camera.targetPosition -= renderer.camera.right * Double(speed)
             case "d":
