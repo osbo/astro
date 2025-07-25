@@ -25,7 +25,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var usePostProcessing: Bool = false
     var numStars: Int32 = 5
     var numPlanets: Int32 = 100
-    var numDust: Int32 = 2000000
+    var numDust: Int32 = 500000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -549,9 +549,11 @@ class Renderer: NSObject, MTKViewDelegate {
         }
         // Barnes-Hut and rendering still use sphereCount
         if sphereCount > 0 {
-            barnesHut(commandBuffer: commandBuffer)
-            lightingPass(commandBuffer: commandBuffer)
-            updateSpheres(commandBuffer: commandBuffer, dt: deltaTime)
+            guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+            barnesHut(computeEncoder: computeEncoder)
+            lightingPass(computeEncoder: computeEncoder)
+            updateSpheres(computeEncoder: computeEncoder, dt: deltaTime)
+            computeEncoder.endEncoding()
         }
         
         if usePostProcessing {
@@ -870,8 +872,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
     }
 
-    func barnesHut(commandBuffer: MTLCommandBuffer) {
-        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+    func barnesHut(computeEncoder: MTLComputeCommandEncoder) {
         computeEncoder.label = "Barnes-Hut"
         computeEncoder.setComputePipelineState(barnesHutPipelineState)
         computeEncoder.setBuffer(octreeNodesBuffer, offset: 0, index: 0)
@@ -890,7 +891,6 @@ class Renderer: NSObject, MTKViewDelegate {
         let threadGroupSize = MTLSize(width: 64, height: 1, depth: 1)
         let threadGroups = MTLSize(width: (sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        computeEncoder.endEncoding()
         // print("Debug buffer:")
         // let ptr = debugBuffer.contents().bindMemory(to: simd_float4.self, capacity: sphereCount)
         // let debugArray = Array(UnsafeBufferPointer(start: ptr, count: sphereCount))
@@ -899,8 +899,7 @@ class Renderer: NSObject, MTKViewDelegate {
         // }
     }
 
-    func lightingPass(commandBuffer: MTLCommandBuffer) {
-        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+    func lightingPass(computeEncoder: MTLComputeCommandEncoder) {
         computeEncoder.label = "Lighting Pass"
         computeEncoder.setComputePipelineState(lightingPassPipelineState)
         computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 0)
@@ -912,11 +911,9 @@ class Renderer: NSObject, MTKViewDelegate {
         let threadGroupSize = MTLSize(width: 64, height: 1, depth: 1)
         let threadGroups = MTLSize(width: (sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        computeEncoder.endEncoding()
     }
 
-    func updateSpheres(commandBuffer: MTLCommandBuffer, dt: Float) {
-        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
+    func updateSpheres(computeEncoder: MTLComputeCommandEncoder, dt: Float) {
         computeEncoder.label = "Update Spheres"
         computeEncoder.setComputePipelineState(updateSpheresPipelineState)
         computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 0)
@@ -930,7 +927,6 @@ class Renderer: NSObject, MTKViewDelegate {
         let threadGroupSize = MTLSize(width: 64, height: 1, depth: 1)
         let threadGroups = MTLSize(width: (sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        computeEncoder.endEncoding()
     }
 
     func copyAndResetParentCount(commandBuffer: MTLCommandBuffer) {

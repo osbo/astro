@@ -56,6 +56,9 @@ kernel void barnesHut(
     while (stackPtr > 0) {
         uint nodeIdx = stack[--stackPtr];
         OctreeNode node = octreeNodesBuffer[nodeIdx];
+        if (node.mortonCode == 0xFFFFFFFFFFFFFFFFu) {
+            continue;
+        }
         // Compute distance from this sphere to node center of mass
         float3 d = (node.centerOfMass - myPos);
         float distSqr = dot(d, d) + softening;
@@ -65,25 +68,29 @@ kernel void barnesHut(
         // Compute node side length based on layer
         const uint maxLayer = 6;
         float sideLength = pow(2.0f, 21.0f - (float)(node.layer));
-        bool isLeaf = true;
-        for (uint i = 0; i < 8; ++i) {
-            if (node.children[i] != INVALID_CHILD_INDEX) { isLeaf = false; break; }
-        }
-        bool useApprox = isLeaf || (sideLength / dist < theta);
-        // Determine isSelf by morton code prefix
+        bool isLeaf = node.layer == 0;
         uint shift = 3 * (node.layer);
-        bool isSelf = ((myMortonCode >> shift) == node.mortonCode);
-        if (useApprox && !isSelf && dist > 10) {
-            float3 force = g * node.totalMass * d / (distSqr * dist);
-            debugTotalMass += node.totalMass;
-            debugTotalDistSqr += distSqr;
-
-            totalForce += force;
-        } else if (!isLeaf) {
-            for (uint i = 0; i < 8; ++i) {
-                uint childIdx = node.children[i];
-                if (childIdx != INVALID_CHILD_INDEX && stackPtr < MAX_STACK_SIZE) {
-                    stack[stackPtr++] = childIdx;
+        bool isSelf = ((myMortonCode >> shift) == node.mortonCode) && isLeaf;
+        if (isLeaf) {
+            // This is a leaf node. Calculate the force directly,
+            // but only if the particle is not inside its own leaf node.
+            if (!isSelf && distSqr > 10) {
+                float3 force = g * node.totalMass * d / (distSqr * dist);
+                totalForce += force;
+            }
+        } else { // This is an internal node
+            // Decide whether to use the approximation or traverse deeper.
+            if (sideLength / dist < theta) {
+                // Node is far enough away, use the approximation (center of mass).
+                float3 force = g * node.totalMass * d / (distSqr * dist);
+                totalForce += force;
+            } else {
+                // Node is too close, traverse its children.
+                for (uint i = 0; i < 8; ++i) {
+                    uint childIdx = node.children[i];
+                    if (childIdx != INVALID_CHILD_INDEX && stackPtr < MAX_STACK_SIZE) {
+                        stack[stackPtr++] = childIdx;
+                    }
                 }
             }
         }
@@ -119,7 +126,7 @@ kernel void lightingPass(
         totalLight += lightSourceColor * att;
     }
     colorTypeBuffer[gid].color.rgb = totalLight;
-    colorTypeBuffer[gid].color.w = min(max(totalLight.r, max(totalLight.g, totalLight.b)), 0.3);
+    colorTypeBuffer[gid].color.w = min(max(totalLight.r, max(totalLight.g, totalLight.b)), 0.8);
 }
 
 kernel void updateSpheres(
@@ -137,7 +144,7 @@ kernel void updateSpheres(
     float3 acceleration = force;
 
     if (colorTypeBuffer[gid].type == 0) {
-        acceleration *= 1e1;
+        acceleration *= 5e0;
     } else if (colorTypeBuffer[gid].type == 1) {
         acceleration *= 5e0;
     } else if (colorTypeBuffer[gid].type == 2) {

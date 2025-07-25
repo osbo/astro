@@ -259,7 +259,7 @@ kernel void clearOctreeNodeBuffer(
     uint gid [[thread_position_in_grid]])
 {
     OctreeNode emptyNode;
-    emptyNode.mortonCode = 0;
+    emptyNode.mortonCode = INVALID_MORTON_CODE;
     emptyNode.centerOfMass = float3(0.0, 0.0, 0.0);
     emptyNode.totalMass = 0.0;
     emptyNode.emittedColor = float4(0.0, 0.0, 0.0, 0.0);
