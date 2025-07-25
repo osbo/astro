@@ -6,7 +6,6 @@ using namespace metal;
 #define MAX_STACK_SIZE 60000
 #define INVALID_CHILD_INDEX 0xFFFFFFFFu
 
-// Morton code generation for 32-bit coordinates to 64-bit Morton codes
 uint64_t interleaveBitsBarnesHut(uint32_t x, uint32_t y, uint32_t z) {
     x &= 0x1FFFFF;  // 21 bits
     y &= 0x1FFFFF;  // 21 bits
@@ -30,17 +29,14 @@ kernel void barnesHut(
     constant uint& rootNodeIndex [[buffer(6)]],
     constant uint& numSpheres [[buffer(7)]],
     constant float& theta [[buffer(8)]],
-    // device float4* debugBuffer [[buffer(9)]],
     uint gid [[thread_position_in_grid]])
 {
     if (gid >= numSpheres) return;
-    // Example: assume root node is at index 0
     uint stack[MAX_STACK_SIZE];
     uint stackPtr = 0;
-    stack[stackPtr++] = rootNodeIndex; // root node index
-    
-    // Define gravitational constant and softening
-    const float g = 1e11; // Or use a simulation-appropriate value
+    stack[stackPtr++] = rootNodeIndex;
+
+    const float g = 1e11;
     const float softening = 0.01;
     float3 totalForce = float3(0.0f);
 
@@ -57,13 +53,11 @@ kernel void barnesHut(
         if (node.mortonCode == 0xFFFFFFFFFFFFFFFFu) {
             continue;
         }
-        // Compute distance from this sphere to node center of mass
         float3 d = (node.centerOfMass - myPos);
         float distSqr = dot(d, d) + softening;
         distSqr = max(distSqr, 1e-6f);
         float dist = sqrt(distSqr);
         dist = max(dist, 1e-6f);
-        // Compute node side length based on layer
         float sideLength = pow(2.0f, 21.0f + (float)(node.layer));
         bool isLeaf = node.layer == 0;
         uint shift = 3 * (node.layer);
@@ -72,22 +66,15 @@ kernel void barnesHut(
             isSelf = ((myMortonCode >> shift) == node.mortonCode) && isLeaf;
         }
         if (isLeaf) {
-            // This is a leaf node. Calculate the force directly,
-            // but only if the particle is not inside its own leaf node.
             if (!isSelf && distSqr > 50) {
                 float3 force = g * node.totalMass * d / (distSqr * dist);
                 totalForce += force;
-                // debugBuffer[gid] = float4(node.layer, sideLength, dist, length(force));
             }
-        } else { // This is an internal node
-            // Decide whether to use the approximation or traverse deeper.
+        } else {
             if (sideLength / dist < theta) {
-                // Node is far enough away, use the approximation (center of mass).
                 float3 force = g * node.totalMass * d / (distSqr * dist);
                 totalForce += force;
-                // debugBuffer[gid] = float4(node.layer, sideLength, dist, length(force));
             } else {
-                // Node is too close, traverse its children.
                 for (uint i = 0; i < 8; ++i) {
                     uint childIdx = node.children[i];
                     if (childIdx != INVALID_CHILD_INDEX && stackPtr < MAX_STACK_SIZE) {
@@ -97,13 +84,7 @@ kernel void barnesHut(
             }
         }
     }
-
-    // debugBuffer[gid] = float4(myType, length(totalForce)*debugTotalDistSqr, length(totalForce), debugTotalDistSqr);
-
-    // Write totalForce to forceBuffer
-    forceBuffer[gid] = clamp(totalForce, -1e7, 1e7);
-
-    // Stars: do not aggregate lighting
+    forceBuffer[gid] = clamp(totalForce, -1e5, 1e5);
 }
 
 kernel void lightingPass(
@@ -152,7 +133,7 @@ kernel void updateSpheres(
         acceleration *= 1e0;
     }
 
-    float3 velocity = velocityRadiusBuffer[gid].velocity * 0.999;
+    float3 velocity = velocityRadiusBuffer[gid].velocity * 0.9995;
     velocity += acceleration * dt;
     velocityRadiusBuffer[gid].velocity = velocity;
     float3 position = positionMassBuffer[gid].position;

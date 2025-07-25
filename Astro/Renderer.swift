@@ -70,7 +70,6 @@ class Renderer: NSObject, MTKViewDelegate {
     var layerCountBuffer: MTLBuffer!
     var octreeNodesBuffer: MTLBuffer!
     var forceBuffer: MTLBuffer!
-    var debugBuffer: MTLBuffer!
     
     var pipelinesCreated = false
     var generateMortonCodesPipelineState: MTLComputePipelineState!
@@ -383,8 +382,6 @@ class Renderer: NSObject, MTKViewDelegate {
         let scanAuxSize = ((octreeCount + 2 * 512 - 1) / (2 * 512))
         self.scanAuxBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * scanAuxSize, options: .storageModeShared)
         self.scanAuxBuffer.label = "Scan Aux Buffer"
-        self.debugBuffer = device.makeBuffer(length: MemoryLayout<simd_float4>.stride * sphereCount, options: .storageModeShared)
-        self.debugBuffer.label = "Debug Buffer"
         // Calculate per-layer sizes and offsets for 9 layers, each removing 3 bits (24, 21, ..., 0)
         let maxLayers = 7
         let totalBits = 18
@@ -810,7 +807,6 @@ class Renderer: NSObject, MTKViewDelegate {
         renderEncoder.setVertexBuffer(positionMassBuffer, offset: 0, index: 2)
         renderEncoder.setVertexBuffer(velocityRadiusBuffer, offset: 0, index: 3)
         renderEncoder.setVertexBuffer(colorTypeBuffer, offset: 0, index: 4)
-        renderEncoder.setVertexBuffer(forceBuffer, offset: 0, index: 5)
         
         var lastPipeline: MTLRenderPipelineState? = nil
         if numStars > 0 {
@@ -888,16 +884,9 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 7)
         var thetaVal: Float = 0.7
         computeEncoder.setBytes(&thetaVal, length: MemoryLayout<Float>.size, index: 8)
-        // computeEncoder.setBuffer(debugBuffer, offset: 0, index: 9)
         let threadGroupSize = MTLSize(width: 64, height: 1, depth: 1)
         let threadGroups = MTLSize(width: (sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-        // print("Debug buffer:")
-        // let ptr = debugBuffer.contents().bindMemory(to: simd_float4.self, capacity: sphereCount)
-        // let debugArray = Array(UnsafeBufferPointer(start: ptr, count: 100))
-        // for value in debugArray {
-        //     print(value)
-        // }
     }
 
     func lightingPass(computeEncoder: MTLComputeCommandEncoder) {

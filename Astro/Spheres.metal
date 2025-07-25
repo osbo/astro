@@ -27,7 +27,6 @@ vertex VertexOut sphere_vertex(VertexIn in [[stage_in]],
                                device const PositionMass *positions [[buffer(2)]],
                                device const VelocityRadius *velocities [[buffer(3)]],
                                device const ColorType *colors [[buffer(4)]],
-                               device const float3 *forces [[buffer(5)]],
                                uint instanceID [[instance_id]])
 {
     VertexOut out;
@@ -50,8 +49,7 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
                                   constant GlobalUniforms &globalUniforms [[buffer(1)]],
                                   device const PositionMass *positions [[buffer(2)]],
                                   device const VelocityRadius *velocities [[buffer(3)]],
-                                  device const ColorType *colors [[buffer(4)]],
-                                  device const float3 *forces [[buffer(5)]])
+                                  device const ColorType *colors [[buffer(4)]])
 {
     DustVertexOut out;
     PositionMass positionData = positions[instanceID];
