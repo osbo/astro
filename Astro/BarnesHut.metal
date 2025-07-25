@@ -101,7 +101,7 @@ kernel void barnesHut(
     // debugBuffer[gid] = float4(myType, length(totalForce)*debugTotalDistSqr, length(totalForce), debugTotalDistSqr);
 
     // Write totalForce to forceBuffer
-    forceBuffer[gid] = totalForce;
+    forceBuffer[gid] = clamp(totalForce, -1e7, 1e7);
 
     // Stars: do not aggregate lighting
 }

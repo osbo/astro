@@ -24,7 +24,7 @@ class Renderer: NSObject, MTKViewDelegate {
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
     var numStars: Int32 = 5
-    var numPlanets: Int32 = 200 
+    var numPlanets: Int32 = 200
     var numDust: Int32 = 500000
     
     var numSpheres: Int32 {
@@ -37,14 +37,14 @@ class Renderer: NSObject, MTKViewDelegate {
     var octreeCount: Int { return Int(numStars) + Int(numPlanets)}
     
     var starRadius: Float = 50000.0
-    var planetRadius: Float = 15000.0
+    var planetRadius: Float = 10000.0
     var dustRadius: Float = 1
     var starMass: Float = 10000
     var planetMass: Float = 1000
     var dustMass: Float = 1
     var initialVelocityMaximum: Float = 20000
     var spawnBounds: Float = 1000000
-    var backgroundColor: MTLClearColor = MTLClearColor(red: 1/255, green: 1/255, blue: 2/255, alpha: 1.0)
+    var backgroundColor: MTLClearColor = MTLClearColor(red: 0/255, green: 0/255, blue: 1/255, alpha: 1.0)
     
     // --- Metal Objects ---
     var starSphere: MTKMesh!
@@ -810,6 +810,7 @@ class Renderer: NSObject, MTKViewDelegate {
         renderEncoder.setVertexBuffer(positionMassBuffer, offset: 0, index: 2)
         renderEncoder.setVertexBuffer(velocityRadiusBuffer, offset: 0, index: 3)
         renderEncoder.setVertexBuffer(colorTypeBuffer, offset: 0, index: 4)
+        renderEncoder.setVertexBuffer(forceBuffer, offset: 0, index: 5)
         
         var lastPipeline: MTLRenderPipelineState? = nil
         if numStars > 0 {
