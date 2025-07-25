@@ -3,7 +3,7 @@
 
 using namespace metal;
 
-#define NUM_LAYERS 8
+#define NUM_LAYERS 6
 #define BITS_PER_LAYER 3
 #define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
 #define UNUSED_BITS (63 - USED_BITS)
@@ -96,11 +96,9 @@ kernel void aggregateLeafNodes(
     float3 finalCenterOfMass = (totalMass > 0.0) ? (totalCenterOfMass / totalMass) : float3(0.0, 0.0, 0.0);
     float4 finalEmittedColor = totalEmittedColor;
     float3 finalEmittedColorCenter = totalEmittedColorCenter;
+    float numSunsSafe = max(float(numSuns), 1e-9f);
+    finalEmittedColorCenter /= numSunsSafe;
     
-    if (numSuns > 0) {
-        finalEmittedColorCenter /= numSuns;
-    }
-
     uint64_t firstMortonCode = sortedMortonCodesBuffer[childStartIdx];
     OctreeNode leafNode;
     leafNode.mortonCode = firstMortonCode;
@@ -205,29 +203,6 @@ kernel void aggregateNodes(
      unsortedIndicesBuffer[gid] = gid;
 
      return;
-
-//    uint numUnique = mortonCodeCountBuffer[0];
-//    if (gid >= numUnique) {
-//        return;
-//    }
-//    uint outputIndex = gid + outputOffset;
-//
-//    OctreeNode node;
-//    node.mortonCode = 1;
-//    node.centerOfMass = float3(0.0, 0.0, 0.0);
-//    node.totalMass = 0.0;
-//    node.emittedColor = float4(0.0, 0.0, 0.0, 0.0);
-//    node.emittedColorCenter = float3(0.0, 0.0, 0.0);
-//    for (int i = 0; i < 8; i++) {
-//        node.children[i] = 0;
-//    }
-//    node.layer = layer;
-//
-//    octreeNodesBuffer[outputIndex] = node;
-//    unsortedMortonCodesBuffer[gid] = 1;
-//    unsortedIndicesBuffer[gid] = gid;
-//
-//    return;
 }
 
 kernel void extractMortonCodes(

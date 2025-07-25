@@ -25,6 +25,7 @@ uint64_t interleaveBitsOptimized(uint32_t x, uint32_t y, uint32_t z) {
 // Compute kernel to generate Morton codes from particle positions
 kernel void generateMortonCodes(device const PositionMass *positions [[buffer(0)]],
                                device uint64_t *mortonCodes [[buffer(1)]],
+                               device uint64_t *unsortedMortonCodes [[buffer(2)]],
                                uint particleIndex [[thread_position_in_grid]])
 {
     // Get particle position
@@ -39,7 +40,7 @@ kernel void generateMortonCodes(device const PositionMass *positions [[buffer(0)
     uint64_t mortonCode = interleaveBitsOptimized(x, y, z);
 
     // Shift to keep only the top N bits (for octree layers)
-    #define NUM_LAYERS 8
+    #define NUM_LAYERS 6
     #define BITS_PER_LAYER 3
     #define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
     #define UNUSED_BITS (63 - USED_BITS)
@@ -47,4 +48,5 @@ kernel void generateMortonCodes(device const PositionMass *positions [[buffer(0)
     
     // Store morton code and index
     mortonCodes[particleIndex] = mortonCode;
+    unsortedMortonCodes[particleIndex] = mortonCode;
 } 

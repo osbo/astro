@@ -3,8 +3,22 @@
 
 using namespace metal;
 
-#define MAX_STACK_SIZE 16384
+#define MAX_STACK_SIZE 50000
 #define INVALID_CHILD_INDEX 0xFFFFFFFFu
+
+// Morton code generation for 32-bit coordinates to 64-bit Morton codes
+uint64_t interleaveBitsBarnesHut(uint32_t x, uint32_t y, uint32_t z) {
+    x &= 0x1FFFFF;  // 21 bits
+    y &= 0x1FFFFF;  // 21 bits  
+    z &= 0x1FFFFF;  // 21 bits
+    uint64_t result = 0;
+    for (int i = 0; i < 21; i++) {
+        result |= ((uint64_t)(x & (1 << i)) << (2 * i));
+        result |= ((uint64_t)(y & (1 << i)) << (2 * i + 1));
+        result |= ((uint64_t)(z & (1 << i)) << (2 * i + 2));
+    }
+    return result;
+}
 
 kernel void barnesHut(
     device OctreeNode* octreeNodesBuffer [[buffer(0)]],
@@ -12,9 +26,11 @@ kernel void barnesHut(
     device VelocityRadius* velocityRadiusBuffer [[buffer(2)]],
     device ColorType* colorTypeBuffer [[buffer(3)]],
     device float3* forceBuffer [[buffer(4)]],
-    constant uint& rootNodeIndex [[buffer(5)]],
-    constant uint& numSpheres [[buffer(6)]],
-    constant float& theta [[buffer(7)]],
+    device uint64_t* mortonCodesBuffer [[buffer(5)]],
+    constant uint& rootNodeIndex [[buffer(6)]],
+    constant uint& numSpheres [[buffer(7)]],
+    constant float& theta [[buffer(8)]],
+    // device float4* debugBuffer [[buffer(9)]],
     uint gid [[thread_position_in_grid]])
 {
     if (gid >= numSpheres) return;
@@ -24,41 +40,43 @@ kernel void barnesHut(
     stack[stackPtr++] = rootNodeIndex; // root node index
     
     // Define gravitational constant and softening
-    const float g = 50000; // Or use a simulation-appropriate value
+    const float g = 5e12; // Or use a simulation-appropriate value
     const float softening = 0.01;
     float3 totalForce = float3(0.0f);
+
+    float debugTotalMass = 0.0;
+    float debugTotalDistSqr = 0.0;
 
     float3 myPos = positionMassBuffer[gid].position;
     float myMass = positionMassBuffer[gid].mass;
     float myType = colorTypeBuffer[gid].type;
     float3 myColor = colorTypeBuffer[gid].color.rgb;
+    uint64_t myMortonCode = mortonCodesBuffer[gid];
 
     while (stackPtr > 0) {
         uint nodeIdx = stack[--stackPtr];
         OctreeNode node = octreeNodesBuffer[nodeIdx];
         // Compute distance from this sphere to node center of mass
-        float3 d = node.centerOfMass - myPos;
+        float3 d = (node.centerOfMass - myPos);
         float distSqr = dot(d, d) + softening;
+        distSqr = max(distSqr, 1e-6f);
         float dist = sqrt(distSqr);
+        dist = max(dist, 1e-6f);
         // Compute node side length based on layer
-        const uint maxLayer = 8;
-        float sideLength = pow(2.0f, 21.0f - (float)(maxLayer - node.layer));
+        const uint maxLayer = 6;
+        float sideLength = pow(2.0f, 21.0f - (float)(node.layer));
         bool isLeaf = true;
         for (uint i = 0; i < 8; ++i) {
             if (node.children[i] != INVALID_CHILD_INDEX) { isLeaf = false; break; }
         }
         bool useApprox = isLeaf || (sideLength / dist < theta);
-        bool isSelf = (dist < 1e-6f);
+        // Determine isSelf by morton code prefix
+        uint shift = 3 * (node.layer);
+        bool isSelf = ((myMortonCode >> shift) == node.mortonCode);
         if (useApprox && !isSelf) {
             float3 force = g * node.totalMass * d / (distSqr * dist);
-
-            // if (myType == 0) {
-            //     force *= 1;
-            // } else if (myType == 1) {
-            //     force *= 10;
-            // } else if (myType == 2) {
-            //     force *= 100;
-            // }
+            debugTotalMass += node.totalMass;
+            debugTotalDistSqr += distSqr;
 
             totalForce += force;
         } else if (!isLeaf) {
@@ -70,6 +88,17 @@ kernel void barnesHut(
             }
         }
     }
+
+    if (myType == 0) {
+        totalForce *= 1e3;
+    } else if (myType == 1) {
+        totalForce *= 1e1;
+    } else if (myType == 2) {
+        totalForce *= 1e-1;
+    }
+
+    // debugBuffer[gid] = float4(myType, length(totalForce)*debugTotalDistSqr, length(totalForce), debugTotalDistSqr);
+
     // Write totalForce to forceBuffer
     forceBuffer[gid] = totalForce;
 
@@ -98,7 +127,7 @@ kernel void lightingPass(
         totalLight += lightSourceColor * att;
     }
     colorTypeBuffer[gid].color.rgb = totalLight;
-    colorTypeBuffer[gid].color.w = max(totalLight.r, max(totalLight.g, totalLight.b));
+    colorTypeBuffer[gid].color.w = min(max(totalLight.r, max(totalLight.g, totalLight.b)), 0.5);
 }
 
 kernel void updateSpheres(
@@ -113,7 +142,7 @@ kernel void updateSpheres(
     if (gid >= numSpheres) return;
     float3 force = forceBuffer[gid];
     float mass = positionMassBuffer[gid].mass;
-    float3 acceleration = force / mass;
+    float3 acceleration = force / max(mass, 1e-9f);
     float3 velocity = velocityRadiusBuffer[gid].velocity * 0.9999;
     velocity += acceleration * dt;
     velocityRadiusBuffer[gid].velocity = velocity;

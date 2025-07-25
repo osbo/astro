@@ -23,9 +23,9 @@ class Renderer: NSObject, MTKViewDelegate {
     
     // --- Simulation Parameters ---
     var usePostProcessing: Bool = false
-    var numStars: Int32 = 3
-    var numPlanets: Int32 = 100
-    var numDust: Int32 = 10000
+    var numStars: Int32 = 5
+    var numPlanets: Int32 = 200
+    var numDust: Int32 = 300000
     
     var numSpheres: Int32 {
         return numStars + numPlanets + numDust
@@ -33,6 +33,8 @@ class Renderer: NSObject, MTKViewDelegate {
     var sphereCount: Int {
         return Int(numStars) + Int(numPlanets) + Int(numDust)
     }
+    // Add this:
+    var octreeCount: Int { return Int(numStars) + Int(numPlanets) }
     
     var starRadius: Float = 50000.0
     var planetRadius: Float = 10000.0
@@ -57,6 +59,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var positionMassBuffer: MTLBuffer!
     var velocityRadiusBuffer: MTLBuffer!
     var colorTypeBuffer: MTLBuffer!
+    var mortonCodesBuffer: MTLBuffer!
     var unsortedMortonCodesBuffer: MTLBuffer!
     var unsortedIndicesBuffer: MTLBuffer!
     var sortedMortonCodesBuffer: MTLBuffer!
@@ -67,6 +70,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var layerCountBuffer: MTLBuffer!
     var octreeNodesBuffer: MTLBuffer!
     var forceBuffer: MTLBuffer!
+    var debugBuffer: MTLBuffer!
     
     var pipelinesCreated = false
     var generateMortonCodesPipelineState: MTLComputePipelineState!
@@ -95,7 +99,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var colors: [ColorType] = []
     
     // Add arrays to store per-layer offsets and sizes
-    let maxLayers: Int = 9
+    let maxLayers: Int = 7
     var layerOffsets: [Int] = []
     var layerSizes: [Int] = []
     var layer: Int = 0
@@ -353,15 +357,18 @@ class Renderer: NSObject, MTKViewDelegate {
         self.velocityRadiusBuffer.label = "Velocity Radius Buffer"
         self.colorTypeBuffer = device.makeBuffer(length: MemoryLayout<ColorType>.stride * sphereCount, options: .storageModeShared)
         self.colorTypeBuffer.label = "Color Type Buffer"
-        self.unsortedMortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * sphereCount, options: .storageModeShared)
+        // The following buffers are only needed for octreeCount, not sphereCount
+        self.mortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * octreeCount, options: .storageModeShared)
+        self.mortonCodesBuffer.label = "Morton Codes Buffer"
+        self.unsortedMortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * octreeCount, options: .storageModeShared)
         self.unsortedMortonCodesBuffer.label = "Unsorted Morton Codes Buffer"
-        self.unsortedIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.unsortedIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * octreeCount, options: .storageModeShared)
         self.unsortedIndicesBuffer.label = "Unsorted Indices Buffer"
-        self.sortedMortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * sphereCount, options: .storageModeShared)
+        self.sortedMortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * octreeCount, options: .storageModeShared)
         self.sortedMortonCodesBuffer.label = "Sorted Morton Codes Buffer"
-        self.sortedIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.sortedIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * octreeCount, options: .storageModeShared)
         self.sortedIndicesBuffer.label = "Sorted Indices Buffer"
-        self.uniqueIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.uniqueIndicesBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * octreeCount, options: .storageModeShared)
         self.uniqueIndicesBuffer.label = "Unique Indices Buffer"
         self.parentCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
         self.parentCountBuffer.label = "Parent Count Buffer"
@@ -369,16 +376,18 @@ class Renderer: NSObject, MTKViewDelegate {
         self.childCountBuffer.label = "Child Count Buffer"
         self.layerCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
         self.layerCountBuffer.label = "Layer Count Buffer"
-        self.flagsBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.flagsBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * octreeCount, options: .storageModeShared)
         self.flagsBuffer.label = "Flags Buffer"
-        self.scanBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * sphereCount, options: .storageModeShared)
+        self.scanBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * octreeCount, options: .storageModeShared)
         self.scanBuffer.label = "Scan Buffer"
-        let scanAuxSize = ((sphereCount + 2 * 512 - 1) / (2 * 512))
+        let scanAuxSize = ((octreeCount + 2 * 512 - 1) / (2 * 512))
         self.scanAuxBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * scanAuxSize, options: .storageModeShared)
         self.scanAuxBuffer.label = "Scan Aux Buffer"
+        self.debugBuffer = device.makeBuffer(length: MemoryLayout<simd_float4>.stride * sphereCount, options: .storageModeShared)
+        self.debugBuffer.label = "Debug Buffer"
         // Calculate per-layer sizes and offsets for 9 layers, each removing 3 bits (24, 21, ..., 0)
-        let maxLayers = 9
-        let totalBits = 24
+        let maxLayers = 7
+        let totalBits = 18
         let bitsPerLayer = 3
         layerSizes = []
         layerOffsets = []
@@ -386,13 +395,11 @@ class Renderer: NSObject, MTKViewDelegate {
         for layer in 0..<maxLayers {
             let bitsRemaining = totalBits - bitsPerLayer * layer
             let possibleValues = bitsRemaining >= 0 ? 1 << bitsRemaining : 1
-            let size = min(sphereCount, possibleValues)
+            let size = min(octreeCount, possibleValues)
             layerSizes.append(size)
             layerOffsets.append(offset)
             offset += size
         }
-//        print("layerOffsets: \(layerOffsets)")
-//        print("layerSizes: \(layerSizes)")
         self.octreeNodesBuffer = device.makeBuffer(length: MemoryLayout<OctreeNode>.stride * offset, options: .storageModeShared)
         self.octreeNodesBuffer.label = "Octree Nodes Buffer"
         self.forceBuffer = device.makeBuffer(length: MemoryLayout<float3>.stride * sphereCount, options: .storageModeShared)
@@ -452,23 +459,14 @@ class Renderer: NSObject, MTKViewDelegate {
         velocities = []
         colors = []
         doublePositions = []
+        var factor: Float = 1
         for i in 0..<sphereCount {
-            let position = SIMD3<Double>(
-                Double.random(in: -Double(spawnBounds)...Double(spawnBounds)),
-                Double.random(in: -Double(spawnBounds)...Double(spawnBounds)),
-                Double.random(in: -Double(spawnBounds)...Double(spawnBounds))
-            )
-            doublePositions.append(position)
-            let velocity = simd_float3(
-                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
-                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
-                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum)
-            )
             var type: UInt32 = 0
             var mass: Float = 0
             var radius: Float = 0
             var color: simd_float4 = simd_float4(0,0,0,1)
             if i < numStars {
+                factor = 0.8
                 type = 0
                 mass = starMass
                 radius = starRadius
@@ -477,16 +475,29 @@ class Renderer: NSObject, MTKViewDelegate {
                 let srgbColor = oklabToSrgb(oklab: oklabColor)
                 color = simd_float4(srgbColor.x, srgbColor.y, srgbColor.z, 1.0)
             } else if i < numStars + numPlanets {
+                factor = 1
                 type = 1
                 mass = planetMass
                 radius = planetRadius
                 color = simd_float4(0, 0, 0, 1)
             } else {
+                factor = 2
                 type = 2
                 mass = dustMass
                 radius = dustRadius
                 color = simd_float4(0, 0, 0, 0)
             }
+            let position = SIMD3<Double>(
+                Double.random(in: -Double(spawnBounds * factor)...Double(spawnBounds * factor)),
+                Double.random(in: -Double(spawnBounds * factor)...Double(spawnBounds * factor)),
+                Double.random(in: -Double(spawnBounds * factor)...Double(spawnBounds * factor))
+            )
+            doublePositions.append(position)
+            let velocity = simd_float3(
+                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
+                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum),
+                Float.random(in: -initialVelocityMaximum...initialVelocityMaximum)
+            )
             positions.append(PositionMass(position: simd_float3(Float(position.x), Float(position.y), Float(position.z)), mass: mass))
             velocities.append(VelocityRadius(velocity: velocity, radius: radius))
             colors.append(ColorType(color: color, type: type))
@@ -512,37 +523,35 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
         commandBuffer.label = "Main Command Buffer"
         
-        if sphereCount > 0 {
+        if octreeCount > 0 {
             commandBuffer.pushDebugGroup("Layer 0: Leaf Nodes")
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: octreeCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: octreeCount, dataType: UInt32.self)
             clearOctreeNodeBuffer(commandBuffer: commandBuffer, buffer: octreeNodesBuffer, count: layerOffsets.last! + layerSizes.last!)
-            generateMortonCodes(commandBuffer: commandBuffer)
-            fillIndices(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, startIdx: 0, endIdx: sphereCount)
-
-            // Initialize mortonCodeCountBuffer[0] to numSpheres (fast operation)
+            generateMortonCodes(commandBuffer: commandBuffer, count: octreeCount)
+            fillIndices(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, startIdx: 0, endIdx: octreeCount)
             let parentCountPointer = parentCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)
-            parentCountPointer[0] = UInt32(numSpheres)
-
-            // Clear sorted buffers after sorting, before copy/final phase
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
-            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
+            parentCountPointer[0] = UInt32(octreeCount)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: octreeCount, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: octreeCount, dataType: UInt32.self)
             radixSorter.sort(commandBuffer: commandBuffer,
                              input: unsortedMortonCodesBuffer,
                              inputIndices: unsortedIndicesBuffer,
                              output: sortedMortonCodesBuffer,
                              outputIndices: sortedIndicesBuffer,
-                             estimatedLength: UInt32(sphereCount),
+                             estimatedLength: UInt32(octreeCount),
                              actualCountBuffer: parentCountBuffer)
-            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false)
-            aggregateLeafNodes(commandBuffer: commandBuffer)
+            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false, count: octreeCount)
+            aggregateLeafNodes(commandBuffer: commandBuffer, count: octreeCount)
             commandBuffer.popDebugGroup()
             self.layer = 1 // Start at first internal layer
-            buildInternalNodes(commandBuffer: commandBuffer)
-
+            buildInternalNodes(commandBuffer: commandBuffer, count: octreeCount)
+        }
+        // Barnes-Hut and rendering still use sphereCount
+        if sphereCount > 0 {
             barnesHut(commandBuffer: commandBuffer)
             lightingPass(commandBuffer: commandBuffer)
-            // updateSpheres(commandBuffer: commandBuffer, dt: deltaTime)
+            updateSpheres(commandBuffer: commandBuffer, dt: deltaTime)
         }
         
         if usePostProcessing {
@@ -557,43 +566,44 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     // ... (keep generateMortonCodes, countUnique, aggregateLeafNodes, etc.)
-    func generateMortonCodes(commandBuffer: MTLCommandBuffer) {
+    func generateMortonCodes(commandBuffer: MTLCommandBuffer, count: Int) {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Generate Morton Codes"
         computeEncoder.setComputePipelineState(generateMortonCodesPipelineState)
         computeEncoder.setBuffer(positionMassBuffer, offset: 0, index: 0)
-        computeEncoder.setBuffer(unsortedMortonCodesBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(mortonCodesBuffer, offset: 0, index: 1)
+        computeEncoder.setBuffer(unsortedMortonCodesBuffer, offset: 0, index: 2)
         let threadGroupSize = MTLSizeMake(64, 1, 1)
-        let threadGroups = MTLSizeMake((sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+        let threadGroups = MTLSizeMake((count + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
         self.layer = 0
     }
 
-    func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer, aggregate: Bool) {
+    func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer, aggregate: Bool, count: Int) {
         // Only use the scan-based unique counting sequence
-        clearBuffer(commandBuffer: commandBuffer, buffer: flagsBuffer, count: sphereCount, dataType: UInt32.self)
-        clearBuffer(commandBuffer: commandBuffer, buffer: scanBuffer, count: sphereCount, dataType: UInt32.self)
-        clearBuffer(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, count: sphereCount, dataType: UInt32.self)
+        clearBuffer(commandBuffer: commandBuffer, buffer: flagsBuffer, count: count, dataType: UInt32.self)
+        clearBuffer(commandBuffer: commandBuffer, buffer: scanBuffer, count: count, dataType: UInt32.self)
+        clearBuffer(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, count: count, dataType: UInt32.self)
         // 1. markUniques
         if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
             computeEncoder.label = "Mark Uniques"
             computeEncoder.setComputePipelineState(markUniquesPipelineState)
             computeEncoder.setBuffer(sortedMortonCodesBuffer, offset: 0, index: 0)
             computeEncoder.setBuffer(flagsBuffer, offset: 0, index: 1)
-            var numSpheresVal = UInt32(numSpheres)
+            var numSpheresVal = UInt32(count)
             computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 2)
             var aggregateVal: UInt32 = aggregate ? 1 : 0
             computeEncoder.setBytes(&aggregateVal, length: MemoryLayout<UInt32>.size, index: 3)
             let threadGroupSize = MTLSizeMake(64, 1, 1)
-            let threadGroups = MTLSizeMake((sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+            let threadGroups = MTLSizeMake((count + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
             computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
             computeEncoder.endEncoding()
         }
         // 2. multi-pass prefixSum
         if let compute = commandBuffer.makeComputeCommandEncoder() {
             compute.label = "Prefix Sum"
-            radixSorter.scanKernel.encodeScanTo(compute, input: flagsBuffer, output: scanBuffer, length: UInt32(sphereCount))
+            radixSorter.scanKernel.encodeScanTo(compute, input: flagsBuffer, output: scanBuffer, length: UInt32(count))
             compute.endEncoding()
         }
         // 3. scatterUniques
@@ -603,10 +613,10 @@ class Renderer: NSObject, MTKViewDelegate {
             computeEncoder.setBuffer(flagsBuffer, offset: 0, index: 0)
             computeEncoder.setBuffer(scanBuffer, offset: 0, index: 1)
             computeEncoder.setBuffer(uniqueIndicesBuffer, offset: 0, index: 2)
-            var numSpheresVal = UInt32(numSpheres)
+            var numSpheresVal = UInt32(count)
             computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 3)
             let threadGroupSize = MTLSizeMake(64, 1, 1)
-            let threadGroups = MTLSizeMake((sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+            let threadGroups = MTLSizeMake((count + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
             computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
             computeEncoder.endEncoding()
         }
@@ -618,7 +628,7 @@ class Renderer: NSObject, MTKViewDelegate {
             computeEncoder.setBuffer(flagsBuffer, offset: 0, index: 1)
             computeEncoder.setBuffer(parentCountBuffer, offset: 0, index: 2)
             computeEncoder.setBuffer(childCountBuffer, offset: 0, index: 3)
-            var countVal = UInt32(sphereCount)
+            var countVal = UInt32(count)
             computeEncoder.setBytes(&countVal, length: MemoryLayout<UInt32>.size, index: 4)
             let threadGroupSize = MTLSizeMake(1, 1, 1)
             let threadGroups = MTLSizeMake(1, 1, 1)
@@ -628,11 +638,11 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func unsortedLeafMortonCodes(commandBuffer: MTLCommandBuffer) {
-        fillIndices(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, startIdx: 0, endIdx: sphereCount)
+        fillIndices(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, startIdx: 0, endIdx: octreeCount)
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Unsorted Leaf Morton Codes"
         computeEncoder.setComputePipelineState(unsortedLeafPipelineState)
-        var numSpheresVal = UInt32(numSpheres)
+        var numSpheresVal = UInt32(octreeCount)
         computeEncoder.setBuffer(parentCountBuffer, offset: 0, index: 0)
         computeEncoder.setBuffer(layerCountBuffer, offset: 0, index: 1)
         computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 2)
@@ -642,7 +652,7 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func unsortedInternalMortonCodes(commandBuffer: MTLCommandBuffer, layer: Int) {
-        let count = max(1, Int(ceil(Double(sphereCount) / pow(8.0, Double(layer)))))
+        let count = max(1, Int(ceil(Double(octreeCount) / pow(8.0, Double(layer)))))
         fillIndices(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, startIdx: 0, endIdx: count)
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Unsorted Internal Morton Codes Layer \(layer)"
@@ -654,7 +664,7 @@ class Renderer: NSObject, MTKViewDelegate {
         self.layer += 1
     }
     
-    func aggregateLeafNodes(commandBuffer: MTLCommandBuffer) {
+    func aggregateLeafNodes(commandBuffer: MTLCommandBuffer, count: Int) {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Aggregate Leaf Nodes"
         computeEncoder.setComputePipelineState(aggregateLeafNodesPipelineState)
@@ -673,7 +683,7 @@ class Renderer: NSObject, MTKViewDelegate {
         //     return
         // }
         let threadGroupSize = MTLSizeMake(64, 1, 1)
-        let threadGroups = MTLSizeMake((Int(numSpheres) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
+        let threadGroups = MTLSizeMake((Int(count) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
     }
@@ -718,7 +728,7 @@ class Renderer: NSObject, MTKViewDelegate {
 //        print("inputOffset: \(inputOffsetVal), outputOffset: \(outputOffsetVal), layer: \(layerVal), inputLayerSize: \(inputLayerSizeVal), outputLayerSize: \(outputLayerSizeVal)")
     }
 
-    func buildInternalNodes(commandBuffer: MTLCommandBuffer) {
+    func buildInternalNodes(commandBuffer: MTLCommandBuffer, count: Int) {
         while self.layer < maxLayers{
             commandBuffer.pushDebugGroup("Layer \(self.layer): Internal Nodes")
             let inputNodeCount = layerSizes[self.layer - 1]
@@ -728,8 +738,8 @@ class Renderer: NSObject, MTKViewDelegate {
 //            print("Building internal nodes for layer \(self.layer) with \(nodeCount) nodes, input offset: \(inputOffset), output offset: \(outputOffset)")
 
             // 1. Clear buffers for this layer's sort
-           clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
-           clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
+           clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: count, dataType: UInt64.self)
+           clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: count, dataType: UInt32.self)
 
         //     // 2. Sort the Morton codes for this layer
             radixSorter.sort(commandBuffer: commandBuffer,
@@ -743,11 +753,11 @@ class Renderer: NSObject, MTKViewDelegate {
 //            print("inputNodeCount: \(inputNodeCount)")
 
             // 3. Count unique Morton codes for this layer
-            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true)
+            countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true, count: count)
 
             // 4. Clear buffers for next unsorted output
-            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedMortonCodesBuffer, count: sphereCount, dataType: UInt64.self)
-            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, count: sphereCount, dataType: UInt32.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedMortonCodesBuffer, count: count, dataType: UInt64.self)
+            clearBuffer(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, count: count, dataType: UInt32.self)
 
             // 5. Aggregate nodes for this layer
             aggregateInternalNodes(commandBuffer: commandBuffer,
@@ -869,16 +879,24 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setBuffer(velocityRadiusBuffer, offset: 0, index: 2)
         computeEncoder.setBuffer(colorTypeBuffer, offset: 0, index: 3)
         computeEncoder.setBuffer(forceBuffer, offset: 0, index: 4)
+        computeEncoder.setBuffer(mortonCodesBuffer, offset: 0, index: 5)
         var rootNodeIndexVal = UInt32(layerOffsets.last!)
-        computeEncoder.setBytes(&rootNodeIndexVal, length: MemoryLayout<UInt32>.size, index: 5)
+        computeEncoder.setBytes(&rootNodeIndexVal, length: MemoryLayout<UInt32>.size, index: 6)
         var numSpheresVal = UInt32(sphereCount)
-        computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 6)
+        computeEncoder.setBytes(&numSpheresVal, length: MemoryLayout<UInt32>.size, index: 7)
         var thetaVal: Float = 0.7
-        computeEncoder.setBytes(&thetaVal, length: MemoryLayout<Float>.size, index: 7)
+        computeEncoder.setBytes(&thetaVal, length: MemoryLayout<Float>.size, index: 8)
+        // computeEncoder.setBuffer(debugBuffer, offset: 0, index: 9)
         let threadGroupSize = MTLSize(width: 64, height: 1, depth: 1)
         let threadGroups = MTLSize(width: (sphereCount + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
+        // print("Debug buffer:")
+        // let ptr = debugBuffer.contents().bindMemory(to: simd_float4.self, capacity: sphereCount)
+        // let debugArray = Array(UnsafeBufferPointer(start: ptr, count: sphereCount))
+        // for value in debugArray {
+        //     print(value)
+        // }
     }
 
     func lightingPass(commandBuffer: MTLCommandBuffer) {

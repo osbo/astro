@@ -62,8 +62,7 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
     out.pointSize = velocityData.radius;
     
     // Set alpha based on brightness
-    float brightness = max(colorData.color.r, max(colorData.color.g, colorData.color.b));
-    out.color = float4(colorData.color.rgb, brightness);
+    out.color = colorData.color;
 
     return out;
 }
@@ -80,12 +79,13 @@ fragment float4 planet_fragment_shader(VertexOut in [[stage_in]],
                                       device const ColorType *colors [[buffer(3)]],
                                       constant uint &numStars [[buffer(4)]])
 {
-    float3 normal = normalize(in.normal);
+    float3 normal = length(in.normal) > 1e-9f ? normalize(in.normal) : float3(0,0,1);
     float3 color = float3(0.0);
     for (uint i = 0; i < numStars; ++i) {
         float3 lightPos = positions[i].position;
         float3 lightColor = colors[i].color.rgb;
-        float3 lightDir = normalize(lightPos - in.worldPosition);
+        float3 lightDirVec = lightPos - in.worldPosition;
+        float3 lightDir = length(lightDirVec) > 1e-9f ? normalize(lightDirVec) : float3(0,0,1);
         float dist = length(lightPos - in.worldPosition);
         float att = 1.0f / pow(max(dist / LIGHT_ATTENUATION_DISTANCE, 1e-6f), 2.0f);
         float diff = max(dot(normal, lightDir), 0.0);
