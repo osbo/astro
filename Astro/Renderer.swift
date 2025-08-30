@@ -38,7 +38,7 @@ class Renderer: NSObject, MTKViewDelegate {
     
     var starRadius: Float = 50000.0
     var planetRadius: Float = 10000.0
-    var dustRadius: Float = 1
+    var dustRadius: Float = 2
     var starMass: Float = 10000
     var planetMass: Float = 1000
     var dustMass: Float = 1
@@ -53,7 +53,6 @@ class Renderer: NSObject, MTKViewDelegate {
     var spherePipelineState: MTLRenderPipelineState!
     var dustPipelineState: MTLRenderPipelineState!
     var postProcessPipelineState: MTLRenderPipelineState!
-    var planetPipelineState: MTLRenderPipelineState! // Add this property to the Renderer class
     
     var globalUniformsBuffer: MTLBuffer!
     var positionMassBuffer: MTLBuffer!
@@ -119,7 +118,7 @@ class Renderer: NSObject, MTKViewDelegate {
         self.commandQueue = device.makeCommandQueue()!
         
         let allocator = MTKMeshBufferAllocator(device: device)
-        let starMDLSphere = MDLMesh(sphereWithExtent: [1, 1, 1], segments: [32, 32], inwardNormals: false, geometryType: .triangles, allocator: allocator)
+        let starMDLSphere = MDLMesh(sphereWithExtent: [1, 1, 1], segments: [16, 16], inwardNormals: false, geometryType: .triangles, allocator: allocator)
         do {
             self.starSphere = try MTKMesh(mesh: starMDLSphere, device: device)
         } catch {
@@ -208,9 +207,6 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let fragmentFunction = library.makeFunction(name: "fragment_shader") else {
             fatalError("Could not find fragment_shader function.")
         }
-        guard let planetFragmentFunction = library.makeFunction(name: "planet_fragment_shader") else {
-            fatalError("Could not find planet_fragment_shader function.")
-        }
         guard let sphereVertexFunction = library.makeFunction(name: "sphere_vertex") else {
             fatalError("Could not find sphere_vertex function.")
         }
@@ -282,13 +278,7 @@ class Renderer: NSObject, MTKViewDelegate {
         spherePipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
         spherePipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
         
-        let planetPipelineDescriptor = MTLRenderPipelineDescriptor()
-        planetPipelineDescriptor.label = "Planet Render Pipeline"
-        planetPipelineDescriptor.vertexFunction = sphereVertexFunction
-        planetPipelineDescriptor.fragmentFunction = planetFragmentFunction
-        planetPipelineDescriptor.vertexDescriptor = MTKMetalVertexDescriptorFromModelIO(planetSphere.vertexDescriptor)
-        planetPipelineDescriptor.colorAttachments[0].pixelFormat = .rgba16Float
-        planetPipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
+
         
         let dustPipelineDescriptor = MTLRenderPipelineDescriptor()
         dustPipelineDescriptor.label = "Dust Render Pipeline"
@@ -314,7 +304,6 @@ class Renderer: NSObject, MTKViewDelegate {
         
         do {
             spherePipelineState = try device.makeRenderPipelineState(descriptor: spherePipelineDescriptor)
-            planetPipelineState = try device.makeRenderPipelineState(descriptor: planetPipelineDescriptor)
             dustPipelineState = try device.makeRenderPipelineState(descriptor: dustPipelineDescriptor)
             postProcessPipelineState = try device.makeRenderPipelineState(descriptor: postProcessPipelineDescriptor)
             generateMortonCodesPipelineState = try device.makeComputePipelineState(function: generateMortonCodesFunction)
@@ -468,7 +457,7 @@ class Renderer: NSObject, MTKViewDelegate {
                 mass = starMass
                 radius = starRadius
                 let hue = Float(i) / Float(numStars)
-                let oklabColor = simd_float3(0.8, 0.2 * cos(2 * .pi * hue), 0.2 * sin(2 * .pi * hue))
+                let oklabColor = simd_float3(1, 0.2 * cos(2 * .pi * hue), 0.2 * sin(2 * .pi * hue))
                 let srgbColor = oklabToSrgb(oklab: oklabColor)
                 color = simd_float4(srgbColor.x, srgbColor.y, srgbColor.z, 1.0)
             } else if i < numStars + numPlanets {
@@ -476,7 +465,8 @@ class Renderer: NSObject, MTKViewDelegate {
                 type = 1
                 mass = planetMass
                 radius = planetRadius
-                color = simd_float4(0, 0, 0, 1)
+                // Planets start black and accumulate color from star lighting
+                color = simd_float4(0, 0, 0, 1.0)
             } else {
                 factor = 2
                 type = 2
@@ -822,17 +812,13 @@ class Renderer: NSObject, MTKViewDelegate {
         }
         
         if numPlanets > 0 {
-            if lastPipeline !== planetPipelineState {
-                renderEncoder.setRenderPipelineState(planetPipelineState)
-                lastPipeline = planetPipelineState
+            if lastPipeline !== spherePipelineState {
+                renderEncoder.setRenderPipelineState(spherePipelineState)
+                lastPipeline = spherePipelineState
             }
             for (index, vertexBuffer) in planetSphere.vertexBuffers.enumerated() {
                 renderEncoder.setVertexBuffer(vertexBuffer.buffer, offset: vertexBuffer.offset, index: index)
             }
-            renderEncoder.setFragmentBuffer(positionMassBuffer, offset: 0, index: 2)
-            renderEncoder.setFragmentBuffer(colorTypeBuffer, offset: 0, index: 3)
-            var numStarsVal = UInt32(numStars)
-            renderEncoder.setFragmentBytes(&numStarsVal, length: MemoryLayout<UInt32>.size, index: 4)
             let submesh = planetSphere.submeshes[0]
             renderEncoder.drawIndexedPrimitives(type: submesh.primitiveType, indexCount: submesh.indexCount, indexType: submesh.indexType, indexBuffer: submesh.indexBuffer.buffer, indexBufferOffset: submesh.indexBuffer.offset, instanceCount: Int(numPlanets), baseVertex: 0, baseInstance: Int(numStars))
         }
