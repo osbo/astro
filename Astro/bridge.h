@@ -12,7 +12,7 @@ using namespace metal;
 #include <stdint.h>
 #endif
 
-// Structs shared between Metal and Swift/C
+
 
 typedef struct {
 #ifdef __METAL_VERSION__
@@ -35,10 +35,10 @@ typedef struct {
 typedef struct {
 #ifdef __METAL_VERSION__
     float4 color;
-    uint type; // 0: star, 1: planet, 2: dust
+    uint type;
 #else
     simd_float4 color;
-    uint32_t type; // 0: star, 1: planet, 2: dust
+    uint32_t type;
 #endif
 } ColorType;
 
@@ -86,14 +86,14 @@ typedef struct {
 #endif
 } LightingInfluences;
 
-// Sentinel value for invalid Morton code (shared between Metal and Swift)
+
 #ifdef __METAL_VERSION__
 #define INVALID_MORTON_CODE 0xFFFFFFFFFFFFFFFFull
 #else
 #define INVALID_MORTON_CODE 0xFFFFFFFFFFFFFFFFull
 #endif
 
-// Shared lighting attenuation parameter for all shaders
+
 #ifdef __METAL_VERSION__
 constant float LIGHT_ATTENUATION_DISTANCE = 4e5;
 #else

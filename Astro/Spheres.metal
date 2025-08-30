@@ -57,7 +57,7 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
     out.position = globalUniforms.projectionMatrix * globalUniforms.viewMatrix * float4(relPosition, 1.0);
     out.pointSize = velocityData.radius;
     
-    // Set alpha based on brightness
+
     out.color = colorData.color;
 
     return out;
@@ -66,5 +66,4 @@ vertex DustVertexOut dust_point_vertex(uint vertexID [[vertex_id]],
 fragment float4 fragment_shader(VertexOut in [[stage_in]])
 {
    return in.color;
-    // return (1,1,1,1);
 }

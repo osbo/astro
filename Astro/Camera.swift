@@ -27,14 +27,14 @@ class Camera {
         position += (targetPosition - position) * factor
     }
 
-    // Floating origin: always return view matrix from (0,0,0) in camera space
+
     func floatViewMatrix() -> simd_float4x4 {
-        // Camera at origin, looking in forward direction
+
         let eye = SIMD3<Double>(0, 0, 0)
         let center = forward
         let upVec = up
         let viewD = lookAtD(from: eye, to: center, up: upVec)
-        // Convert each column from double to float
+
         return simd_float4x4(
             simd_float4(Float(viewD.columns.0.x), Float(viewD.columns.0.y), Float(viewD.columns.0.z), Float(viewD.columns.0.w)),
             simd_float4(Float(viewD.columns.1.x), Float(viewD.columns.1.y), Float(viewD.columns.1.z), Float(viewD.columns.1.w)),
@@ -43,13 +43,13 @@ class Camera {
         )
     }
 
-    // Helper to get camera position as float3 for GPU
+
     var floatPosition: simd_float3 {
         return simd_float3(Float(position.x), Float(position.y), Float(position.z))
     }
 }
 
-// Double-precision lookAt
+
 func lookAtD(from eye: SIMD3<Double>, to center: SIMD3<Double>, up: SIMD3<Double>) -> simd_double4x4 {
     let z = simd_normalize(eye - center)
     let x = simd_normalize(simd_cross(up, z))

@@ -10,15 +10,15 @@ struct ContentView: NSViewRepresentable {
         let mtkView = CustomMTKView()
         let renderer = context.coordinator
         mtkView.delegate = renderer
-        mtkView.renderer = renderer // Assign renderer here
-        mtkView.preferredFramesPerSecond = 120 // Lowered slightly, PP is expensive
+        mtkView.renderer = renderer
+        mtkView.preferredFramesPerSecond = 120
         mtkView.enableSetNeedsDisplay = false
         mtkView.isPaused = false
-        mtkView.depthStencilPixelFormat = .invalid // Prevent MTKView from allocating unused depth texture
-        mtkView.colorPixelFormat = .rgba16Float // Ensure this matches textures/pipelines
-        mtkView.framebufferOnly = false  // Needs to be false for drawable texture access? Check if true works. Often false needed if view provides drawable texture. Let's keep false.
+        mtkView.depthStencilPixelFormat = .invalid
+        mtkView.colorPixelFormat = .rgba16Float
+        mtkView.framebufferOnly = false
 
-        // Enable HDR output
+
         if let metalLayer = mtkView.layer as? CAMetalLayer {
             metalLayer.wantsExtendedDynamicRangeContent = true
             if let cs = CGColorSpace(name: "kCGColorSpaceExtendedLinearSRGB" as CFString) {
@@ -26,8 +26,7 @@ struct ContentView: NSViewRepresentable {
             }
         }
 
-        // Ensure depth texture is created (needed for scene pass)
-        // mtkView.depthStencilPixelFormat = .depth32Float // This line is removed as per the edit hint.
+
 
         guard let metalDevice = MTLCreateSystemDefaultDevice() else {
             fatalError("Metal device creation failed")
@@ -35,19 +34,15 @@ struct ContentView: NSViewRepresentable {
         mtkView.device = metalDevice
 
 
-        // Initial size setup *before* first draw
-        // Get initial frame size correctly
+
         mtkView.needsLayout = true
-        mtkView.layoutSubtreeIfNeeded() // Try to force layout early
+        mtkView.layoutSubtreeIfNeeded()
 
 
-        // Crucial for receiving key events immediately
-        // Delay slightly maybe?
+
         DispatchQueue.main.async {
              let success = mtkView.window?.makeFirstResponder(mtkView)
              if success == false {
-                 // If window isn't ready, try again later maybe?
-                 // Or rely on mouseDown/viewDidMoveToWindow
              }
         }
 
@@ -56,7 +51,7 @@ struct ContentView: NSViewRepresentable {
 
     func updateNSView(_ nsView: MTKView, context: NSViewRepresentableContext<ContentView>) {
 
-         // Re-ensure first responder status, especially if window focus changes
+
          DispatchQueue.main.async {
              if nsView.window?.isKeyWindow ?? false && nsView.window?.firstResponder != nsView {
                  nsView.window?.makeFirstResponder(nsView)
@@ -64,11 +59,9 @@ struct ContentView: NSViewRepresentable {
          }
     }
 
-    // --- CustomMTKView ---
-    // Keep your CustomMTKView class as it was, handling input.
-    // No changes needed inside CustomMTKView for post-processing.
+
     class CustomMTKView: MTKView {
-        var renderer: Renderer! // Renderer must be assigned
+        var renderer: Renderer!
         private var lastDragLocation: CGPoint?
 
         override var acceptsFirstResponder: Bool { true }
@@ -83,7 +76,6 @@ struct ContentView: NSViewRepresentable {
 
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-            // Useful for making sure clicks activate the view immediately
             return true
         }
 
@@ -106,13 +98,13 @@ struct ContentView: NSViewRepresentable {
 
         override func scrollWheel(with event: NSEvent) {
             let scrollAmount = event.deltaY
-            let zoomSensitivity: Float = 10000 // scale up
+            let zoomSensitivity: Float = 10000
             let moveVector = renderer.camera.forward * Double(scrollAmount) * Double(zoomSensitivity)
             renderer.camera.targetPosition += moveVector
         }
 
         override func keyDown(with event: NSEvent) {
-            let speed: Float = 100000 // scale up
+            let speed: Float = 100000
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "w":
                 renderer.camera.targetPosition += SIMD3<Double>(0, 1, 0) * Double(speed)
@@ -127,7 +119,7 @@ struct ContentView: NSViewRepresentable {
                     renderer.resetSimulation()
                 }
             default:
-                 super.keyDown(with: event) // Call super for unhandled keys
+                 super.keyDown(with: event)
             }
         }
     }

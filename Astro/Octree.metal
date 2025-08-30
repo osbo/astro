@@ -7,7 +7,7 @@ using namespace metal;
 #define BITS_PER_LAYER 3
 #define USED_BITS (NUM_LAYERS * BITS_PER_LAYER)
 #define UNUSED_BITS (63 - USED_BITS)
-#define INVALID_CHILD 0xFFFFFFFFu // Sentinel for invalid child index
+#define INVALID_CHILD 0xFFFFFFFFu
 
 kernel void countUniqueMortonCodes(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
@@ -35,7 +35,7 @@ kernel void countUniqueMortonCodes(
     }
 }
 
-// Kernel: fills buffer with startIdx..(endIdx-1)
+
 kernel void fillIndices(
     device uint* buffer [[buffer(0)]],
     constant uint& startIdx [[buffer(1)]],
@@ -116,7 +116,7 @@ kernel void aggregateLeafNodes(
     return;
 }
 
-// Updated aggregateNodes kernel: single node buffer, explicit input/output offsets
+
 kernel void aggregateNodes(
     device OctreeNode* octreeNodesBuffer [[buffer(0)]],
     device const uint64_t* sortedMortonCodesBuffer [[buffer(1)]],
@@ -135,7 +135,7 @@ kernel void aggregateNodes(
 {
      uint numUnique = atomic_load_explicit(parentCountBuffer, memory_order_relaxed);
      if (gid >= numUnique) {
-         // This parent node is not valid and should not be processed.
+
          return;
      }
 
@@ -190,11 +190,9 @@ kernel void aggregateNodes(
          node.children[i] = (i < childCount) ? children[i] : INVALID_CHILD;
      }
 
-     // Robust bounds check for output index
+
      uint outputIndex = gid + outputOffset;
-     // if (outputIndex < outputOffset || outputIndex >= outputOffset + outputLayerSize) {
-     //     return;
-     // }
+
 
      octreeNodesBuffer[outputIndex] = node;
      unsortedMortonCodesBuffer[gid] = shiftedMortonCode;
@@ -280,7 +278,7 @@ kernel void copyAndResetParentCount(device atomic_uint* parentCountBuffer [[buff
     }
 }
 
-// New kernel: markUniques
+
 kernel void markUniques(
     device const uint64_t* sortedMortonCodes [[buffer(0)]],
     device uint* flags [[buffer(1)]],
@@ -304,7 +302,7 @@ kernel void markUniques(
     flags[gid] = isUnique ? 1 : 0;
 }
 
-// New kernel: scatterUniques
+
 kernel void scatterUniques(
     device const uint* flags [[buffer(0)]],
     device const uint* scan [[buffer(1)]],
@@ -319,7 +317,7 @@ kernel void scatterUniques(
     }
 }
 
-// New kernel: copyLastScanToParentCount
+
 kernel void copyLastScanToParentCount(
     device const uint* scanBuffer [[buffer(0)]],
     device const uint* flagsBuffer [[buffer(1)]],

@@ -1,7 +1,7 @@
 import Metal
 import Foundation
 
-// Swift equivalents of the Metal enums
+
 public enum ScanBufferIndex: Int {
     case input = 0
     case output = 1
@@ -27,7 +27,7 @@ public class MetalKernelsRadixSort {
     public let splitKernel: SplitKernel
     public let maxLength: UInt32
 
-    // Intermediate buffers for ping-ponging during the sort
+
     public var tempKeys: MTLBuffer!
     public var tempIndices: MTLBuffer!
     public var tempKeysB: MTLBuffer!
@@ -42,7 +42,7 @@ public class MetalKernelsRadixSort {
         self.maxLength = maxLength
         self.scanKernel = ScanKernel(device: device, maxLength: maxLength)
         self.splitKernel = SplitKernel(device: device, maxLength: maxLength)
-        // Create copy pipelines
+
         guard let library = device.makeDefaultLibrary() else {
             fatalError("Failed to get default Metal library for copy pipelines")
         }
@@ -67,7 +67,7 @@ public class MetalKernelsRadixSort {
     }
 
     public func clearInternalBuffers(commandBuffer: MTLCommandBuffer) {
-        // Clear tempKeys (UInt64)
+
         if let tempKeys = tempKeys {
             let count = tempKeys.length / MemoryLayout<UInt64>.stride
             if let encoder = commandBuffer.makeComputeCommandEncoder() {
@@ -80,7 +80,7 @@ public class MetalKernelsRadixSort {
                 encoder.endEncoding()
             }
         }
-        // Clear tempIndices (UInt32)
+
         if let tempIndices = tempIndices {
             let count = tempIndices.length / MemoryLayout<UInt32>.stride
             if let encoder = commandBuffer.makeComputeCommandEncoder() {
@@ -104,7 +104,7 @@ public class MetalKernelsRadixSort {
               actualCountBuffer: MTLBuffer) {
 
         guard estimatedLength > 0 else { return }
-        // Fully clear all internal buffers before copying, to avoid stale data
+
         let clearBuffers: [(MTLBuffer?, MTLComputePipelineState, Int)] = [
             (tempKeys, clearBuffer64Pipeline, Int(maxLength)),
             (tempKeysB, clearBuffer64Pipeline, Int(maxLength)),
@@ -123,10 +123,9 @@ public class MetalKernelsRadixSort {
             }
         }
 
-        // 1. Copy input to tempKeys/tempIndices
+
         if let copyEncoder = commandBuffer.makeComputeCommandEncoder() {
             copyEncoder.label = "Radix Sort Initial Copy"
-            // Copy keys
             copyEncoder.setComputePipelineState(copyKeysPipeline)
             copyEncoder.setBuffer(input, offset: 0, index: 0)
             copyEncoder.setBuffer(tempKeys, offset: 0, index: 1)
@@ -134,7 +133,6 @@ public class MetalKernelsRadixSort {
             let threadGroupSize = MTLSize(width: 512, height: 1, depth: 1)
             let threadGroups = MTLSize(width: (Int(estimatedLength) + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
             copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-            // Copy indices
             copyEncoder.setComputePipelineState(copyIndicesPipeline)
             copyEncoder.setBuffer(inputIndices, offset: 0, index: 0)
             copyEncoder.setBuffer(tempIndices, offset: 0, index: 1)
@@ -143,7 +141,7 @@ public class MetalKernelsRadixSort {
             copyEncoder.endEncoding()
         }
 
-        // 2. Flip-flop sort between tempKeys/tempKeysB and tempIndices/tempIndicesB
+
         var keysIn = tempKeys!
         var keysOut = tempKeysB!
         var indicesIn = tempIndices!
@@ -167,10 +165,9 @@ public class MetalKernelsRadixSort {
         }
         compute.endEncoding()
 
-        // 3. Copy final sorted buffer to output
+
         if let copyEncoder = commandBuffer.makeComputeCommandEncoder() {
             copyEncoder.label = "Radix Sort Final Copy"
-            // Copy keys
             copyEncoder.setComputePipelineState(copyKeysPipeline)
             copyEncoder.setBuffer(keysIn, offset: 0, index: 0)
             copyEncoder.setBuffer(output, offset: 0, index: 1)
@@ -178,7 +175,6 @@ public class MetalKernelsRadixSort {
             let threadGroupSize = MTLSize(width: 512, height: 1, depth: 1)
             let threadGroups = MTLSize(width: (Int(estimatedLength) + threadGroupSize.width - 1) / threadGroupSize.width, height: 1, depth: 1)
             copyEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
-            // Copy indices
             copyEncoder.setComputePipelineState(copyIndicesPipeline)
             copyEncoder.setBuffer(indicesIn, offset: 0, index: 0)
             copyEncoder.setBuffer(outputIndices, offset: 0, index: 1)
@@ -189,7 +185,7 @@ public class MetalKernelsRadixSort {
     }
 }
 
-// MARK: - Scan Kernel
+
 
 public class ScanKernel {
     public let device: MTLDevice
@@ -249,7 +245,7 @@ public class ScanKernel {
             compute.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
         } else {
-            // Pass 1: Block-wise scan
+
             compute.setComputePipelineState(prefixSumPipeline)
             compute.setBuffer(input, offset: 0, index: ScanBufferIndex.input.rawValue)
             compute.setBuffer(output, offset: 0, index: ScanBufferIndex.output.rawValue)
@@ -260,7 +256,7 @@ public class ScanKernel {
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
             compute.memoryBarrier(resources: [output, self.auxBuffer])
             
-            // Pass 2: Scan the auxiliary buffer
+
             var auxLength = UInt32(numThreadgroups)
             compute.setComputePipelineState(prefixSumPipeline)
             compute.setBuffer(self.auxBuffer, offset: 0, index: ScanBufferIndex.input.rawValue)
@@ -272,7 +268,7 @@ public class ScanKernel {
                                          threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1))
             compute.memoryBarrier(resources: [self.aux2Buffer])
 
-            // Pass 3: Fix up the main buffer
+
             compute.setComputePipelineState(prefixFixupPipeline)
             compute.setBuffer(output, offset: 0, index: ScanBufferIndex.input.rawValue)
             compute.setBuffer(self.aux2Buffer, offset: 0, index: ScanBufferIndex.aux.rawValue)
@@ -283,7 +279,7 @@ public class ScanKernel {
     }
 }
 
-// MARK: - Split Kernel
+
 
 public class SplitKernel {
     public let device: MTLDevice
@@ -324,7 +320,7 @@ public class SplitKernel {
 
         var bitVar = bit
 
-        // Step 1: Prepare split data
+
         compute.setComputePipelineState(prepPipeline)
         compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
         compute.setBytes(&bitVar, length: MemoryLayout<UInt32>.size, index: SplitBufferIndex.bit.rawValue)
@@ -335,10 +331,10 @@ public class SplitKernel {
         let threadgroups = MTLSize(width: (Int(estimatedLength) + threadgroupSize.width - 1) / threadgroupSize.width, height: 1, depth: 1)
         compute.dispatchThreadgroups(threadgroups, threadsPerThreadgroup: threadgroupSize)
 
-        // Step 2: Scan the e-buffer to get the f-buffer
+
         scanKernel.encodeScanTo(compute, input: eBuffer, output: fBuffer, length: estimatedLength)
 
-        // Step 3: Scatter based on the split information
+
         compute.setComputePipelineState(scatterPipeline)
         compute.setBuffer(input, offset: 0, index: SplitBufferIndex.input.rawValue)
         compute.setBuffer(inputIndices, offset: 0, index: SplitBufferIndex.inputIndices.rawValue)

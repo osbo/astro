@@ -7,9 +7,9 @@ using namespace metal;
 #define INVALID_CHILD_INDEX 0xFFFFFFFFu
 
 uint64_t interleaveBitsBarnesHut(uint32_t x, uint32_t y, uint32_t z) {
-    x &= 0x1FFFFF;  // 21 bits
-    y &= 0x1FFFFF;  // 21 bits
-    z &= 0x1FFFFF;  // 21 bits
+    x &= 0x1FFFFF;
+    y &= 0x1FFFFF;
+    z &= 0x1FFFFF;
     uint64_t result = 0;
     for (int i = 0; i < 21; i++) {
         result |= ((uint64_t)(x & (1 << i)) << (2 * i));
@@ -59,7 +59,7 @@ kernel void barnesHut(
         distSqr = max(distSqr, 1e-6f);
         float dist = sqrt(distSqr);
         dist = max(dist, 1e-6f);
-        float sideLength = float(1 << (21 + node.layer));  // Much faster than pow()
+        float sideLength = float(1 << (21 + node.layer));
         bool isLeaf = node.layer == 0;
         uint shift = 3 * (node.layer);
         bool isSelf = false;
@@ -76,7 +76,7 @@ kernel void barnesHut(
                 float3 force = g * node.totalMass * d / (distSqr * dist);
                 totalForce += force;
             } else {
-                // Unroll the 8-child loop for better performance
+
                 uint child0 = node.children[0];
                 uint child1 = node.children[1];
                 uint child2 = node.children[2];
@@ -109,10 +109,10 @@ kernel void lightingPass(
 {
     if (gid >= numSpheres) return;
     uint type = colorTypeBuffer[gid].type;
-    if (type != 1 && type != 2) return; // Process planets (type 1) and dust (type 2)
+    if (type != 1 && type != 2) return;
     float3 position = positionMassBuffer[gid].position;
     float3 totalLight = float3(0.0f);
-    // Unroll the star loop for better performance (you have 5 stars)
+
     if (numStars >= 1) {
         float3 lightSourcePos = positionMassBuffer[0].position;
         float3 lightSourceColor = colorTypeBuffer[0].color.rgb;
@@ -160,10 +160,8 @@ kernel void lightingPass(
     }
     colorTypeBuffer[gid].color.rgb = totalLight;
     if (type == 2) {
-        // Dust: alpha based on brightness
         colorTypeBuffer[gid].color.w = min(max(totalLight.r, max(totalLight.g, totalLight.b)), 0.25);
     } else {
-        // Planets: full opacity
         colorTypeBuffer[gid].color.w = 1.0;
     }
 }

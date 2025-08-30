@@ -12,7 +12,7 @@ func createProjectionMatrix(fov: Float, aspect: Float, near: Float, far: Float) 
     )
 }
 
-// OKLab to Linear sRGB conversion
+
 func oklabToSrgb(oklab: simd_float3) -> simd_float3 {
     let l = oklab.x
     let a = oklab.y

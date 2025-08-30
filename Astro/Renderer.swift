@@ -13,7 +13,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var commandQueue: MTLCommandQueue!
     var depthStencilState: MTLDepthStencilState!
     var sceneTexture: MTLTexture!
-    var depthTexture: MTLTexture! // Add this line
+    var depthTexture: MTLTexture!
     var currentDrawableSize: CGSize = .zero
     var textureSampler: MTLSamplerState!
     
@@ -21,7 +21,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var lastFrameTime = CFAbsoluteTimeGetCurrent()
     var currentTime: Float = 0.0
     
-    // --- Simulation Parameters ---
+
     var usePostProcessing: Bool = false
     var numStars: Int32 = 5
     var numPlanets: Int32 = 200
@@ -33,7 +33,6 @@ class Renderer: NSObject, MTKViewDelegate {
     var sphereCount: Int {
         return Int(numStars) + Int(numPlanets) + Int(numDust)
     }
-    // Add this:
     var octreeCount: Int { return Int(numStars) + Int(numPlanets)}
     
     var starRadius: Float = 50000.0
@@ -46,7 +45,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var spawnBounds: Float = 1000000
     var backgroundColor: MTLClearColor = MTLClearColor(red: 0/255, green: 0/255, blue: 1/255, alpha: 1.0)
     
-    // --- Metal Objects ---
+
     var starSphere: MTKMesh!
     var planetSphere: MTKMesh!
     
@@ -90,13 +89,13 @@ class Renderer: NSObject, MTKViewDelegate {
 
     var radixSorter: MetalKernelsRadixSort!
     
-    // Floating origin: store world positions as double
+
     var doublePositions: [SIMD3<Double>] = []
     var positions: [PositionMass] = []
     var velocities: [VelocityRadius] = []
     var colors: [ColorType] = []
     
-    // Add arrays to store per-layer offsets and sizes
+
     let maxLayers: Int = 7
     var layerOffsets: [Int] = []
     var layerSizes: [Int] = []
@@ -106,7 +105,7 @@ class Renderer: NSObject, MTKViewDelegate {
     var scanBuffer: MTLBuffer!
     var scanAuxBuffer: MTLBuffer!
     
-    // 1. In class Renderer, add pipeline states:
+
     var markUniquesPipelineState: MTLComputePipelineState!
     var scatterUniquesPipelineState: MTLComputePipelineState!
     var prefixSumPipelineState: MTLComputePipelineState!
@@ -137,7 +136,6 @@ class Renderer: NSObject, MTKViewDelegate {
         setupDepthStencilStates()
         createTextureSampler(device: device)
         radixSorter = MetalKernelsRadixSort(device: device, maxLength: UInt32(numSpheres))
-        // Defer makeBuffers and setMaxLength until size is known
     }
     
     private func setupDepthStencilStates() {
@@ -203,7 +201,7 @@ class Renderer: NSObject, MTKViewDelegate {
             fatalError("Could not load default Metal library.")
         }
         
-        // Your existing pipeline creation logic...
+
         guard let fragmentFunction = library.makeFunction(name: "fragment_shader") else {
             fatalError("Could not find fragment_shader function.")
         }
@@ -323,7 +321,7 @@ class Renderer: NSObject, MTKViewDelegate {
             fatalError("Failed to create pipeline state: \(error)")
         }
         
-        // 2. In makePipelines(view:):
+
         if let markUniquesFunction = library.makeFunction(name: "markUniques") {
             markUniquesPipelineState = try! device.makeComputePipelineState(function: markUniquesFunction)
         }
@@ -345,7 +343,7 @@ class Renderer: NSObject, MTKViewDelegate {
         self.velocityRadiusBuffer.label = "Velocity Radius Buffer"
         self.colorTypeBuffer = device.makeBuffer(length: MemoryLayout<ColorType>.stride * sphereCount, options: .storageModeShared)
         self.colorTypeBuffer.label = "Color Type Buffer"
-        // The following buffers are only needed for octreeCount, not sphereCount
+
         self.mortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * octreeCount, options: .storageModeShared)
         self.mortonCodesBuffer.label = "Morton Codes Buffer"
         self.unsortedMortonCodesBuffer = device.makeBuffer(length: MemoryLayout<UInt64>.stride * octreeCount, options: .storageModeShared)
@@ -371,7 +369,7 @@ class Renderer: NSObject, MTKViewDelegate {
         let scanAuxSize = ((octreeCount + 2 * 512 - 1) / (2 * 512))
         self.scanAuxBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride * scanAuxSize, options: .storageModeShared)
         self.scanAuxBuffer.label = "Scan Aux Buffer"
-        // Calculate per-layer sizes and offsets for 9 layers, each removing 3 bits (24, 21, ..., 0)
+
         let maxLayers = 7
         let totalBits = 18
         let bitsPerLayer = 3
@@ -392,7 +390,7 @@ class Renderer: NSObject, MTKViewDelegate {
         self.forceBuffer.label = "Force Buffer"
     }
     
-    // ... (keep your existing makeSpheres, fillIndices, etc.)
+
     func fillIndices(commandBuffer: MTLCommandBuffer, buffer: MTLBuffer, startIdx: Int, endIdx: Int) {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Fill Indices"
@@ -414,7 +412,7 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Clear Buffer"
         
-        // Choose the appropriate pipeline state based on data type
+
         if T.self == UInt64.self {
             computeEncoder.setComputePipelineState(clearBuffer64PipelineState)
             computeEncoder.setBuffer(buffer, offset: 0, index: 0)
@@ -465,7 +463,7 @@ class Renderer: NSObject, MTKViewDelegate {
                 type = 1
                 mass = planetMass
                 radius = planetRadius
-                // Planets start black and accumulate color from star lighting
+
                 color = simd_float4(0, 0, 0, 1.0)
             } else {
                 factor = 2
@@ -531,10 +529,10 @@ class Renderer: NSObject, MTKViewDelegate {
             countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: false, count: octreeCount)
             aggregateLeafNodes(commandBuffer: commandBuffer, count: octreeCount)
             commandBuffer.popDebugGroup()
-            self.layer = 1 // Start at first internal layer
+            self.layer = 1
             buildInternalNodes(commandBuffer: commandBuffer, count: octreeCount)
         }
-        // Barnes-Hut and rendering still use sphereCount
+
         if sphereCount > 0 {
             guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
             barnesHut(computeEncoder: computeEncoder)
@@ -554,7 +552,7 @@ class Renderer: NSObject, MTKViewDelegate {
         commandBuffer.commit()
     }
     
-    // ... (keep generateMortonCodes, countUnique, aggregateLeafNodes, etc.)
+
     func generateMortonCodes(commandBuffer: MTLCommandBuffer, count: Int) {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Generate Morton Codes"
@@ -570,11 +568,11 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func countUniqueMortonCodes(commandBuffer: MTLCommandBuffer, aggregate: Bool, count: Int) {
-        // Only use the scan-based unique counting sequence
+
         clearBuffer(commandBuffer: commandBuffer, buffer: flagsBuffer, count: count, dataType: UInt32.self)
         clearBuffer(commandBuffer: commandBuffer, buffer: scanBuffer, count: count, dataType: UInt32.self)
         clearBuffer(commandBuffer: commandBuffer, buffer: uniqueIndicesBuffer, count: count, dataType: UInt32.self)
-        // 1. markUniques
+
         if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
             computeEncoder.label = "Mark Uniques"
             computeEncoder.setComputePipelineState(markUniquesPipelineState)
@@ -589,13 +587,13 @@ class Renderer: NSObject, MTKViewDelegate {
             computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
             computeEncoder.endEncoding()
         }
-        // 2. multi-pass prefixSum
+
         if let compute = commandBuffer.makeComputeCommandEncoder() {
             compute.label = "Prefix Sum"
             radixSorter.scanKernel.encodeScanTo(compute, input: flagsBuffer, output: scanBuffer, length: UInt32(count))
             compute.endEncoding()
         }
-        // 3. scatterUniques
+
         if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
             computeEncoder.label = "Scatter Uniques"
             computeEncoder.setComputePipelineState(scatterUniquesPipelineState)
@@ -609,7 +607,7 @@ class Renderer: NSObject, MTKViewDelegate {
             computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
             computeEncoder.endEncoding()
         }
-        // 4. copyLastScanToParentCount (GPU-side unique count)
+
         if let computeEncoder = commandBuffer.makeComputeCommandEncoder() {
             computeEncoder.label = "Copy Last Scan To Parent Count"
             computeEncoder.setComputePipelineState(copyLastScanToParentCountPipelineState)
@@ -666,11 +664,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.setBuffer(octreeNodesBuffer, offset: 0, index: 6)
         computeEncoder.setBuffer(unsortedMortonCodesBuffer, offset: 0, index: 7)
         computeEncoder.setBuffer(unsortedIndicesBuffer, offset: 0, index: 8)
-        // let numNodes = parentCountBuffer.contents().bindMemory(to: UInt32.self, capacity: 1)[0]
-        // if numNodes == 0 {
-        //     computeEncoder.endEncoding()
-        //     return
-        // }
+
         let threadGroupSize = MTLSizeMake(64, 1, 1)
         let threadGroups = MTLSizeMake((Int(count) + threadGroupSize.width - 1) / threadGroupSize.width, 1, 1)
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
@@ -678,7 +672,7 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func aggregateInternalNodes(commandBuffer: MTLCommandBuffer, inputOffset: Int, outputOffset: Int, nodeCount: Int) {
-        // Prevent out-of-bounds access for the last layer
+
         guard self.layer < layerSizes.count else { return }
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else { return }
         computeEncoder.label = "Aggregate Internal Nodes Layer \(self.layer)"
@@ -714,7 +708,7 @@ class Renderer: NSObject, MTKViewDelegate {
         computeEncoder.dispatchThreadgroups(threadGroups, threadsPerThreadgroup: threadGroupSize)
         computeEncoder.endEncoding()
 
-//        print("inputOffset: \(inputOffsetVal), outputOffset: \(outputOffsetVal), layer: \(layerVal), inputLayerSize: \(inputLayerSizeVal), outputLayerSize: \(outputLayerSizeVal)")
+
     }
 
     func buildInternalNodes(commandBuffer: MTLCommandBuffer, count: Int) {
@@ -724,13 +718,13 @@ class Renderer: NSObject, MTKViewDelegate {
             let nodeCount = layerSizes[self.layer]
             let inputOffset = layerOffsets[self.layer - 1]
             let outputOffset = layerOffsets[self.layer]
-//            print("Building internal nodes for layer \(self.layer) with \(nodeCount) nodes, input offset: \(inputOffset), output offset: \(outputOffset)")
 
-            // 1. Clear buffers for this layer's sort
+
+
            clearBuffer(commandBuffer: commandBuffer, buffer: sortedMortonCodesBuffer, count: count, dataType: UInt64.self)
            clearBuffer(commandBuffer: commandBuffer, buffer: sortedIndicesBuffer, count: count, dataType: UInt32.self)
 
-        //     // 2. Sort the Morton codes for this layer
+
             radixSorter.sort(commandBuffer: commandBuffer,
                              input: unsortedMortonCodesBuffer,
                              inputIndices: unsortedIndicesBuffer,
@@ -739,28 +733,28 @@ class Renderer: NSObject, MTKViewDelegate {
                              estimatedLength: UInt32(inputNodeCount),
                              actualCountBuffer: parentCountBuffer)
 
-//            print("inputNodeCount: \(inputNodeCount)")
 
-            // 3. Count unique Morton codes for this layer
+
+
             countUniqueMortonCodes(commandBuffer: commandBuffer, aggregate: true, count: count)
 
-            // 4. Clear buffers for next unsorted output
+
             clearBuffer(commandBuffer: commandBuffer, buffer: unsortedMortonCodesBuffer, count: count, dataType: UInt64.self)
             clearBuffer(commandBuffer: commandBuffer, buffer: unsortedIndicesBuffer, count: count, dataType: UInt32.self)
 
-            // 5. Aggregate nodes for this layer
+
             aggregateInternalNodes(commandBuffer: commandBuffer,
                                    inputOffset: inputOffset,
                                    outputOffset: outputOffset,
                                    nodeCount: nodeCount)
 
-            // Only increment layer after successful aggregation
+
             self.layer += 1
             commandBuffer.popDebugGroup()
         }
     }
     
-    // ... (keep your renderScene, renderSceneDirect, postProcess, and resetUIntBuffer methods)
+
     func renderScene(commandBuffer: MTLCommandBuffer) {
         let sceneRenderPassDescriptor = MTLRenderPassDescriptor()
         sceneRenderPassDescriptor.colorAttachments[0].texture = sceneTexture
@@ -778,7 +772,7 @@ class Renderer: NSObject, MTKViewDelegate {
 
     func renderSceneDirect(commandBuffer: MTLCommandBuffer, screenPassDescriptor: MTLRenderPassDescriptor) {
         screenPassDescriptor.colorAttachments[0].clearColor = backgroundColor
-        screenPassDescriptor.depthAttachment.texture = depthTexture // Use the memoryless depth texture
+        screenPassDescriptor.depthAttachment.texture = depthTexture
         screenPassDescriptor.depthAttachment.loadAction = .clear
         screenPassDescriptor.depthAttachment.storeAction = .dontCare
         screenPassDescriptor.depthAttachment.clearDepth = 1.0
@@ -848,8 +842,7 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     func resetUIntBuffer(computeEncoder: MTLComputeCommandEncoder, buffer: MTLBuffer) {
-        // Note: This function doesn't create its own encoder, it uses the one passed in
-        // The label should be set by the calling function
+
         computeEncoder.setComputePipelineState(resetUIntBufferPipelineState)
         computeEncoder.setBuffer(buffer, offset: 0, index: 0)
         computeEncoder.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))

@@ -1,10 +1,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Constants
+
 #define SCAN_BLOCKSIZE 512
 
-// Buffer indices for scan operations
+
 enum ScanBufferIndex {
     ScanBufferIndexInput,
     ScanBufferIndexOutput,
@@ -13,7 +13,7 @@ enum ScanBufferIndex {
     ScanBufferIndexZeroff,
 };
 
-// Buffer indices for split operations
+
 enum SplitBufferIndex {
     SplitBufferIndexInput,
     SplitBufferIndexInputIndices,
@@ -25,7 +25,7 @@ enum SplitBufferIndex {
     SplitBufferIndexF
 };
 
-// --- Scan Kernels ---
+
 
 kernel void prefixFixup(device uint *input [[ buffer(ScanBufferIndexInput) ]],
                          device uint *aux [[ buffer(ScanBufferIndexAux) ]],
@@ -53,12 +53,12 @@ kernel void prefixSum(device const uint* input [[ buffer(ScanBufferIndexInput) ]
     uint t1 = threadIdx + 2 * blockIdx * SCAN_BLOCKSIZE;
     uint t2 = t1 + SCAN_BLOCKSIZE;
     
-    // Pre-load into shared memory
+
     scan_array[threadIdx] = (t1<len) ? input[t1] : 0;
     scan_array[threadIdx + SCAN_BLOCKSIZE] = (t2<len) ? input[t2] : 0;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     
-    // Reduction
+
     for (uint stride = 1; stride <= SCAN_BLOCKSIZE; stride <<= 1) {
         uint index = (threadIdx + 1) * stride * 2 - 1;
         if (index < 2 * SCAN_BLOCKSIZE)
@@ -66,7 +66,7 @@ kernel void prefixSum(device const uint* input [[ buffer(ScanBufferIndexInput) ]
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     
-    // Post reduction (down-sweep)
+
     for (uint stride = SCAN_BLOCKSIZE >> 1; stride > 0; stride >>= 1) {
         uint index = (threadIdx + 1) * stride * 2 - 1;
         if (index + stride < 2 * SCAN_BLOCKSIZE)
@@ -75,7 +75,7 @@ kernel void prefixSum(device const uint* input [[ buffer(ScanBufferIndexInput) ]
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     
-    // Output values & aux
+
     if (t1+zeroff < len)    output[t1+zeroff] = scan_array[threadIdx];
     if (t2+zeroff < len)    output[t2+zeroff] = (threadIdx==SCAN_BLOCKSIZE-1 && zeroff) ? 0 : scan_array[threadIdx + SCAN_BLOCKSIZE];
     if ( threadIdx == 0 ) {
@@ -84,7 +84,7 @@ kernel void prefixSum(device const uint* input [[ buffer(ScanBufferIndexInput) ]
     }
 }
 
-// --- Split Kernels ---
+
 
 kernel void split_prep(device const ulong* input [[ buffer(SplitBufferIndexInput) ]],
                        constant uint& bit [[ buffer(SplitBufferIndexBit) ]],
@@ -95,7 +95,7 @@ kernel void split_prep(device const ulong* input [[ buffer(SplitBufferIndexInput
     if(tid >= count) {
         return;
     }
-    // e[i] is 1 if the bit is 0, and 0 if the bit is 1.
+
     e[tid] = (input[tid] & (1UL << bit)) == 0;
 }
 
@@ -113,22 +113,16 @@ kernel void split_scatter(device const ulong* input [[ buffer(SplitBufferIndexIn
         return;
     }
 
-    // Get the total number of elements with bit 0 (falses)
-    // This requires reading the last element of the scanned buffer (f)
+
     uint totalFalses = f[count-1] + e[count-1];
     
-    // Check if the current element's bit is set or not
+
     bool isBitSet = (input[tid] & (1UL << bit)) != 0;
     
     uint destinationIndex;
     if (isBitSet) {
-        // This element has bit == 1, so it goes into the 'true' partition.
-        // Its position is after all the 'false' elements.
-        // tid - f[tid] gives the index within the 'true' partition.
         destinationIndex = totalFalses + (tid - f[tid]);
     } else {
-        // This element has bit == 0, so it goes into the 'false' partition.
-        // Its position is simply its scanned index from f.
         destinationIndex = f[tid];
     }
 
@@ -136,7 +130,7 @@ kernel void split_scatter(device const ulong* input [[ buffer(SplitBufferIndexIn
     outputIndices[destinationIndex] = inputIndices[tid];
 }
 
-// --- Copy Kernel ---
+
 
 kernel void copyBuffer(device const ulong* input [[ buffer(0) ]],
                        device ulong* output [[ buffer(1) ]],
