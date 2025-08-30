@@ -4,47 +4,21 @@
 
 A sophisticated N-body gravitational simulation written in Swift and Metal, featuring advanced GPU optimizations, custom radix sorting, and optimized octree data structures. This project demonstrates high-performance computing techniques optimized for Apple Silicon Macs, achieving real-time simulation of **500,000+ particles** through algorithmic optimization rather than brute force.
 
-## Performance Highlights
-
-- **500,000+ particles** with real-time simulation at interactive frame rates
-- **O(n log n)** complexity via Barnes-Hut algorithm with custom optimizations
-- **Custom GPU radix sorting** without Metal Performance Shaders
-- **Optimized octree storage** for maximum GPU residency
-- **120 FPS target** with advanced lighting effects
-
 **[VIDEO: Current Performance Demo - 500k particles at 120 FPS]**
 
-## Technical Architecture
+## Performance Benchmarks
 
-### Core Simulation Engine
+| Metric | Value | Context |
+|--------|-------|---------|
+| **Particle Count** | 500,000+ | Real-time simulation |
+| **Frame Rate** | 120 FPS | Target performance |
+| **Algorithm Complexity** | O(n log n) | Barnes-Hut optimization |
+| **GPU Memory Efficiency** | Contiguous storage | Zero pointer overhead |
+| **Spatial Resolution** | 21 bits per axis | Morton code optimization |
 
-The simulation uses the **Barnes-Hut algorithm** to reduce computational complexity from O(n²) to O(n log n). The implementation features:
+**[BENCHMARK: Performance comparison across different layer configurations]**
 
-- **Morton Code-based spatial partitioning** for efficient octree construction
-- **Custom GPU radix sorting** with prefix sums for optimal memory access patterns
-- **Layer-by-layer octree construction** with collision-aware storage allocation
-- **Floating-point origin system** using double precision for large-scale simulations
-
-### Barnes-Hut Force Calculation
-
-The force calculation kernel implements a **stack-based traversal algorithm** for optimal performance. Each particle traverses the octree using a depth-first approach, maintaining a stack of nodes to visit. The algorithm applies the theta criterion (θ = 0.7) to determine when to approximate distant particle groups as single masses.
-
-**Key optimizations include:**
-- **Early termination** for self-interactions
-- **Force clamping** to prevent numerical instability
-- **Softening parameters** to handle close particle encounters
-- **Stack-based approach** that minimizes memory access patterns
-
-### GPU-Optimized Data Structures
-
-All data structures are designed for optimal GPU caching and memory access patterns:
-
-- **PositionMass struct** combines position and mass data in a single cache line
-- **OctreeNode struct** includes all necessary information for force calculations, lighting, and tree traversal in a compact format
-- **Shared structs** between Swift and Metal through the bridging header for zero-copy operations
-- **Optimized buffer layouts** for coalesced memory access
-
-## Key Technical Achievements
+## Core Technical Innovations
 
 ### Layer-by-Layer Octree Storage
 
@@ -69,7 +43,26 @@ The Morton code implementation supports up to 21 bits per spatial direction (63 
 
 At this depth, most individual particles maintain their own leaf nodes, ensuring maximum accuracy in the Barnes-Hut approximation while minimizing computational overhead. This optimization was determined through empirical testing rather than theoretical analysis.
 
-**[BENCHMARK: Performance comparison across different layer configurations]**
+## Implementation Details
+
+### Barnes-Hut Force Calculation
+
+The force calculation kernel implements a **stack-based traversal algorithm** for optimal performance. Each particle traverses the octree using a depth-first approach, maintaining a stack of nodes to visit. The algorithm applies the theta criterion (θ = 0.7) to determine when to approximate distant particle groups as single masses.
+
+**Key optimizations include:**
+- **Early termination** for self-interactions
+- **Force clamping** to prevent numerical instability
+- **Softening parameters** to handle close particle encounters
+- **Stack-based approach** that minimizes memory access patterns
+
+### GPU-Optimized Data Structures
+
+All data structures are designed for optimal GPU caching and memory access patterns:
+
+- **PositionMass struct** combines position and mass data in a single cache line
+- **OctreeNode struct** includes all necessary information for force calculations, lighting, and tree traversal in a compact format
+- **Shared structs** between Swift and Metal through the bridging header for zero-copy operations
+- **Optimized buffer layouts** for coalesced memory access
 
 ## Engineering Trade-offs: Performance vs. Visual Fidelity
 
@@ -114,44 +107,23 @@ The simulation is currently configured for maximum particle count:
 
 The configuration can be adjusted in `Renderer.swift` to optimize for different performance targets.
 
-## What This Demonstrates
-
-### Advanced GPU Programming
-- Custom Metal compute kernels without relying on Metal Performance Shaders
-- Sophisticated memory management and buffer optimization
-- Parallel algorithm design optimized for GPU architecture
-
-### Algorithm Design
-- Novel octree storage pattern that eliminates pointer-based tree structures
-- Empirical optimization of spatial partitioning parameters
-- Custom radix sort implementation tailored to specific use case
-
-### Performance Engineering
-- Real-time simulation of 500,000+ particles through algorithmic optimization
-- Memory bandwidth optimization through contiguous data structures
-- GPU cache efficiency through careful data layout design
-
-### Engineering Decision-Making
-- Ability to make difficult trade-offs between competing technical goals
-- Focus on core value proposition over feature completeness
-- Understanding of performance bottlenecks and optimization priorities
-
-### Cross-Platform Development
-- Shared structs in bridging headers for Swift/Metal interoperability
-- Zero-copy operations between CPU and GPU memory
-- Efficient data flow between different programming paradigms
-
-## Technical Achievements Summary
+## Summary
 
 This project demonstrates expertise in:
 
-1. **High-Performance Computing**: Real-time simulation of complex physical systems
-2. **GPU Architecture Optimization**: Custom algorithms designed for GPU parallel processing
-3. **Algorithm Design**: Novel approaches to classic computational problems
-4. **Memory System Optimization**: Contiguous data structures for maximum bandwidth utilization
-5. **Cross-Platform Development**: Seamless integration between Swift and Metal
-6. **Performance Profiling**: Empirical optimization based on real-world testing
-7. **Engineering Decision-Making**: Ability to prioritize and make difficult technical trade-offs
+### Technical Skills
+- **High-Performance Computing**: Real-time simulation of complex physical systems
+- **GPU Architecture Optimization**: Custom algorithms designed for GPU parallel processing
+- **Algorithm Design**: Novel approaches to classic computational problems
+- **Memory System Optimization**: Contiguous data structures for maximum bandwidth utilization
+- **Cross-Platform Development**: Seamless integration between Swift and Metal
+- **Performance Profiling**: Empirical optimization based on real-world testing
+
+### Engineering Judgment
+- **Engineering Decision-Making**: Ability to make difficult trade-offs between competing technical goals
+- **Product Focus**: Prioritizing core value proposition over feature completeness
+- **Performance Optimization**: Understanding of bottlenecks and optimization priorities
+- **Code Quality**: Discipline to remove code that doesn't serve the primary goal
 
 The combination of algorithmic optimization, GPU optimization, and performance engineering makes this project a compelling demonstration of advanced software engineering skills in high-performance computing and graphics programming.
 
