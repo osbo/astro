@@ -4,7 +4,7 @@
 
 A sophisticated N-body gravitational simulation written in Swift and Metal, featuring advanced GPU optimizations, custom radix sorting, and innovative octree data structures. This project demonstrates high-performance computing techniques optimized for Apple Silicon Macs, achieving real-time simulation of **500,000+ particles** through algorithmic innovation rather than brute force.
 
-## 🚀 Performance Highlights
+## Performance Highlights
 
 - **500,000+ particles** with real-time simulation at interactive frame rates
 - **O(n log n)** complexity via Barnes-Hut algorithm with custom optimizations
@@ -12,11 +12,11 @@ A sophisticated N-body gravitational simulation written in Swift and Metal, feat
 - **Optimized octree storage** for maximum GPU residency
 - **120 FPS target** with advanced lighting effects
 
-## 🔬 What Makes This Unique
+## What Makes This Unique
 
 This project represents a complete reimagining of N-body simulation architecture, moving beyond traditional approaches to achieve unprecedented performance. Rather than simply implementing the Barnes-Hut algorithm, I developed several key innovations that make this simulation possible at scale:
 
-### 🏗️ Innovative Octree Storage Architecture
+### Innovative Octree Storage Architecture
 
 The most significant technical achievement is the **layer-by-layer octree construction** with collision-aware storage allocation. Traditional octree implementations use pointer-based tree structures that scatter data across memory, causing poor GPU cache performance. This implementation uses a revolutionary storage pattern where:
 
@@ -27,7 +27,7 @@ The most significant technical achievement is the **layer-by-layer octree constr
 
 This design eliminates the need for pointer-based tree structures entirely, keeping all octree data in contiguous memory regions that maximize GPU residency and enable efficient parallel processing across the entire tree structure.
 
-### 🔄 Custom GPU Radix Sort Implementation
+### Custom GPU Radix Sort Implementation
 
 The project implements a complete GPU radix sort from scratch, providing full control over the sorting process without relying on Metal Performance Shaders. This custom implementation features:
 
@@ -38,13 +38,13 @@ The project implements a complete GPU radix sort from scratch, providing full co
 
 This custom implementation was necessary because Metal Performance Shaders don't provide the level of control needed for the specific Morton code sorting requirements of the Barnes-Hut algorithm.
 
-### 📊 Morton Code Optimization Through Empirical Testing
+### Morton Code Optimization Through Empirical Testing
 
 The Morton code implementation supports up to 21 bits per spatial direction (63 total bits), providing extremely fine spatial resolution. However, extensive testing with particle counts from 10,000 to 500,000 revealed that using only **7 layers (21 bits total)** provides the optimal balance between spatial partitioning and individual particle isolation.
 
 At this depth, most individual particles maintain their own leaf nodes, ensuring maximum accuracy in the Barnes-Hut approximation while minimizing computational overhead. This optimization was determined through empirical testing rather than theoretical analysis, demonstrating the importance of performance profiling in algorithm design.
 
-## 🏛️ Technical Architecture
+## Technical Architecture
 
 ### Core Simulation Engine
 
@@ -74,7 +74,7 @@ All data structures are carefully designed for optimal GPU caching and memory ac
 - **Shared structs** between Swift and Metal through the bridging header for zero-copy operations
 - **Optimized buffer layouts** for coalesced memory access
 
-## 💡 What This Demonstrates
+## What This Demonstrates
 
 ### Advanced GPU Programming
 - Custom Metal compute kernels without relying on Metal Performance Shaders
@@ -96,7 +96,9 @@ All data structures are carefully designed for optimal GPU caching and memory ac
 - Zero-copy operations between CPU and GPU memory
 - Efficient data flow between different programming paradigms
 
-## 🎨 Legacy Graphics Features
+## Legacy Graphics Features (Not in Current Codebase)
+
+**Note: The advanced graphics features described below were part of a previous version of this simulation and are not present in the current codebase.** The current version prioritizes maximum particle count and simulation performance over visual effects.
 
 The previous version of this simulation prioritized visual fidelity and advanced graphics techniques over particle count. This legacy version showcased sophisticated rendering techniques that demonstrated the full capabilities of modern GPU graphics programming.
 
@@ -117,9 +119,9 @@ The legacy version featured a full post-processing pipeline designed to achieve 
 - **Chromatic aberration** simulating lens imperfections for enhanced depth perception
 - **Custom planet shaders** with atmospheric scattering calculations
 
-These advanced graphics features were disabled in the current version to prioritize simulation performance and maximum particle count, but the underlying shader infrastructure and mathematical implementations remain in the codebase for future reactivation.
+These advanced graphics features were removed from the current version to prioritize simulation performance and maximum particle count. The current codebase focuses entirely on the core simulation engine and performance optimizations.
 
-## ⚙️ Current Configuration
+## Current Configuration
 
 The simulation is currently configured for maximum particle count:
 
@@ -128,9 +130,9 @@ The simulation is currently configured for maximum particle count:
 - **500,000 dust particles** for realistic space environment
 - **Post-processing disabled** to maximize simulation performance
 
-The configuration can be adjusted in `Renderer.swift` to optimize for different performance targets or to re-enable advanced graphics features.
+The configuration can be adjusted in `Renderer.swift` to optimize for different performance targets.
 
-## 🏆 Technical Achievements Summary
+## Technical Achievements Summary
 
 This project demonstrates expertise in:
 
