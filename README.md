@@ -4,7 +4,9 @@
 
 A sophisticated N-body gravitational simulation written in Swift and Metal, featuring advanced GPU optimizations, custom radix sorting, and optimized octree data structures. This project demonstrates high-performance computing techniques optimized for Apple Silicon Macs, achieving real-time simulation of **500,000+ particles** through algorithmic optimization rather than brute force.
 
-https://github.com/osbo/astro/raw/main/Astro%20new.mov
+https://github.com/user-attachments/assets/08e9cf07-12ed-4a69-9199-036abba64c4d
+
+
 
 ## Performance Benchmarks
 
@@ -70,7 +72,9 @@ This project demonstrates deliberate engineering decision-making by prioritizing
 
 The previous version prioritized visual fidelity and advanced graphics techniques, showcasing sophisticated rendering capabilities:
 
-https://github.com/osbo/astro/raw/main/Astro%20old.mov
+https://github.com/user-attachments/assets/249034c1-7b04-4f1e-8b72-a393e5383a83
+
+
 
 **Advanced Gravitational Effects:**
 - **Vertex-shifting gravitational lensing** using definite integrals over gravitational fields
