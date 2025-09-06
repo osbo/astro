@@ -96,8 +96,6 @@ The current version represents a deliberate engineering trade-off, removing adva
 - **Understanding of performance bottlenecks** and optimization priorities
 - **Engineering discipline** to remove code that doesn't serve the primary goal
 
-**[BENCHMARK: Performance comparison between legacy and current versions]**
-
 ## Current Configuration
 
 The simulation is currently configured for maximum particle count:
